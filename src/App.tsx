@@ -1,0 +1,255 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { SUNGLASSES_CATALOG } from './data/catalog';
+import {
+  SunglassesProduct,
+  TryOnMode,
+  LightingPreset,
+  TrackingStats,
+  CalibrationSettings,
+} from './types';
+import { Header } from './components/Navigation/Header';
+import { ViewportContainer } from './components/Viewport/ViewportContainer';
+import { SnapshotPreviewModal } from './components/Controls/SnapshotPreviewModal';
+import { AIFitAdvisorModal } from './components/Modals/AIFitAdvisorModal';
+import { soundEffects } from './utils/audio';
+import {
+  getProductsAPI,
+  saveLookAPI,
+  logTelemetryAPI,
+} from './services/api';
+import { ProductThumbnail } from './components/Catalog/ProductThumbnail';
+import { ArrowUpRight, Check, Sparkles } from 'lucide-react';
+import { StylesCoverflow } from './components/Catalog/StylesCoverflow';
+
+export const App: React.FC = () => {
+  const [products, setProducts] = useState<SunglassesProduct[]>(SUNGLASSES_CATALOG);
+  const [activeProduct, setActiveProduct] = useState<SunglassesProduct>(SUNGLASSES_CATALOG[0]);
+  const [variantIndex, setVariantIndex] = useState<number>(0);
+
+  const [mode, setMode] = useState<TryOnMode>('webcam');
+  const [mirror, setMirror] = useState<boolean>(true);
+  const [lightingPreset, setLightingPreset] = useState<LightingPreset>('studio');
+  const [isAudioMuted, setIsAudioMuted] = useState<boolean>(false);
+
+  // Modals state
+  const [isFitAdvisorOpen, setIsFitAdvisorOpen] = useState<boolean>(false);
+  const [snapshotTrigger, setSnapshotTrigger] = useState<number>(0);
+  const [snapshotDataUrl, setSnapshotDataUrl] = useState<string | null>(null);
+  const [isSnapshotModalOpen, setIsSnapshotModalOpen] = useState<boolean>(false);
+  const [customPhotoUrl, setCustomPhotoUrl] = useState<string | null>('/models_faces/female_oval.jpg');
+
+  // Calibration state
+  const [calibration, setCalibration] = useState<CalibrationSettings>({
+    scale: 1.0,
+    ipdOffsetMm: 0,
+    verticalOffsetMm: 0,
+    depthOffsetMm: 0,
+    mirror: true,
+  });
+
+  // Tracking telemetry
+  const [stats, setStats] = useState<TrackingStats>({
+    fps: 60,
+    faceDetected: false,
+    landmarksCount: 0,
+    estimatedIpdMm: 63.0,
+    trackingConfidence: 0,
+    depthOcclusionActive: true,
+    headYaw: 0,
+    headPitch: 0,
+    headRoll: 0,
+  });
+
+  const lastTelemetryLogRef = useRef<number>(0);
+
+  // Load products and cart from backend on mount
+  useEffect(() => {
+    const initializeBackendData = async () => {
+      try {
+        const fetchedProducts = await getProductsAPI();
+        if (fetchedProducts.length > 0) {
+          const merged = [...fetchedProducts];
+          for (const local of SUNGLASSES_CATALOG) {
+            if (!merged.some(product => product.id === local.id)) merged.push(local);
+          }
+          setProducts(merged);
+          // Preserve currently selected product or default to first
+          const current = fetchedProducts.find((p) => p.id === activeProduct.id) || fetchedProducts[0];
+          setActiveProduct(current);
+        }
+      } catch (err) {
+        console.warn('Backend connection fallback to local catalog:', err);
+      }
+    };
+
+    initializeBackendData();
+  }, []);
+
+  // Periodic CV telemetry logging to backend (throttled to every 5s)
+  useEffect(() => {
+    if (!stats.faceDetected) return;
+    const now = Date.now();
+    if (now - lastTelemetryLogRef.current > 5000) {
+      lastTelemetryLogRef.current = now;
+      logTelemetryAPI({
+        fps: stats.fps,
+        ipdMm: stats.estimatedIpdMm,
+        faceWidthMm: stats.faceWidthMm || 139,
+        headYaw: stats.headYaw,
+        headPitch: stats.headPitch,
+        headRoll: stats.headRoll,
+        trackingConfidence: stats.trackingConfidence,
+      });
+    }
+  }, [stats]);
+
+  // Handlers
+  const handleSelectProduct = (product: SunglassesProduct) => {
+    soundEffects.playTryOnChime();
+    setMode('webcam');
+    setActiveProduct(product);
+    setVariantIndex(product.activeVariantIndex || 0);
+    if (window.innerWidth < 1024) {
+      window.scrollTo({ top: 80, behavior: 'smooth' });
+    }
+  };
+
+  const handleVariantChange = (newVariantIndex: number) => {
+    setVariantIndex(newVariantIndex);
+    setProducts((prev) =>
+      prev.map((p) =>
+        p.id === activeProduct.id ? { ...p, activeVariantIndex: newVariantIndex } : p
+      )
+    );
+  };
+
+  const handleResetCalibration = () => {
+    setCalibration({
+      scale: 1.0,
+      ipdOffsetMm: 0,
+      verticalOffsetMm: 0,
+      depthOffsetMm: 0,
+      mirror: true,
+    });
+  };
+
+  const handleFileUpload = (file: File) => {
+    soundEffects.playClick();
+    const url = URL.createObjectURL(file);
+    setCustomPhotoUrl(url);
+    setMode('photo');
+  };
+
+  const handleCaptureSnapshot = () => {
+    setSnapshotTrigger(Date.now());
+  };
+
+  const handleSnapshotReady = (dataUrl: string) => {
+    setSnapshotDataUrl(dataUrl);
+    setIsSnapshotModalOpen(true);
+
+    // Save snapshot to backend lookbook
+    const currentVariant = activeProduct.variants[variantIndex] || activeProduct.variants[0];
+    saveLookAPI({
+      productId: activeProduct.id,
+      productName: `${activeProduct.brand} ${activeProduct.name}`,
+      variantName: currentVariant.name,
+      dataUrl,
+      ipdMm: stats.estimatedIpdMm,
+      faceShape: 'Oval',
+    });
+  };
+
+  const handleToggleAudio = () => {
+    const enabled = soundEffects.toggleSound();
+    setIsAudioMuted(!enabled);
+  };
+
+  return (
+    <div className="retail-shell min-h-screen bg-black text-white font-sans flex flex-col justify-between selection:bg-red-600 selection:text-white">
+      {/* Official Sunglass Hut Navigation Header */}
+      <Header
+        currentMode={mode}
+        onModeChange={setMode}
+        onOpenFitAdvisor={() => setIsFitAdvisorOpen(true)}
+        isAudioMuted={isAudioMuted}
+        onToggleAudio={handleToggleAudio}
+        isFaceTracked={stats.faceDetected}
+      />
+
+      {/* Main E-Commerce Page Layout */}
+      <main className="max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-4 sm:py-6 flex-1 flex flex-col gap-6">
+        <div className="flex flex-col gap-6 w-full max-w-5xl mx-auto">
+          <div className="studio-intro">
+            <div><span className="section-eyebrow">THE VIRTUAL FITTING ROOM</span><h1>Find your <em>signature.</em></h1></div>
+            <div className="fit-entry"><p>Good frames change everything.<br />Find the pair that feels like you.</p><button onClick={() => { setMode('webcam'); setIsFitAdvisorOpen(true); }}><Sparkles size={15} /> Find my fit <ArrowUpRight size={15} /></button></div>
+          </div>
+          <div className="fitting-layout">
+          <section className="mirror-panel">
+            <ViewportContainer
+              product={activeProduct}
+              variantIndex={variantIndex}
+              mode={mode}
+              onModeChange={setMode}
+              stats={stats}
+              onStatsUpdate={setStats}
+              mirror={mirror}
+              onToggleMirror={() => setMirror(!mirror)}
+              lightingPreset={lightingPreset}
+              onLightingChange={setLightingPreset}
+              calibration={calibration}
+              onCalibrationChange={setCalibration}
+              onResetCalibration={handleResetCalibration}
+              onCaptureSnapshot={handleCaptureSnapshot}
+              onSnapshotReady={handleSnapshotReady}
+              snapshotTrigger={snapshotTrigger}
+              customPhotoUrl={customPhotoUrl}
+              onFileUpload={handleFileUpload}
+              onSelectModel={(url) => setCustomPhotoUrl(url)}
+            />
+          </section>
+
+          <aside className="frame-details">
+            <div className="frame-details-top"><span className="section-eyebrow">YOUR FRAME</span><span className="frame-number">01 / SELECTED</span></div>
+            <div className="featured-preview"><ProductThumbnail product={activeProduct} variantIndex={variantIndex} /></div>
+            <span className="frame-brand">{activeProduct.brand === 'Model Library' ? 'Studio collection' : activeProduct.brand}</span>
+            <h2>{activeProduct.name}</h2>
+            <div className="finish-options">
+              <span className="detail-label">FINISH</span>
+              <div className="finish-swatches">{activeProduct.variants.map((variant, i) => <button key={i} aria-label={variant.name} aria-pressed={i === variantIndex} title={variant.name} onClick={() => handleVariantChange(i)} style={{ backgroundColor: variant.frameHex }}>{i === variantIndex && <Check size={12} />}</button>)}</div>
+              <p>{activeProduct.variants[variantIndex]?.name ?? activeProduct.variants[0].name}</p>
+            </div>
+            <button className="frame-capture" onClick={handleCaptureSnapshot}>Save this look <ArrowUpRight size={17} /></button>
+            <span className="frame-hint">Choose a frame below to make it yours.</span>
+          </aside>
+          </div>
+          {/* Horizontal Catalog Row */}
+          <section className="w-full">
+            <StylesCoverflow products={products} activeId={activeProduct.id} onSelect={handleSelectProduct} />
+          </section>
+        </div>
+
+
+      </main>
+
+      <footer className="studio-footer"><span>lumen.vision · Eyewear studio</span><span>Virtual try-on & immersive showroom</span></footer>
+
+      {/* 3. AI Facial Morphology & Fit Advisor Modal (Backend Powered) */}
+      <AIFitAdvisorModal
+        isOpen={isFitAdvisorOpen}
+        onClose={() => setIsFitAdvisorOpen(false)}
+        onSelectProduct={handleSelectProduct}
+        stats={stats}
+        products={products}
+      />
+
+      {/* 4. High-Resolution Snapshot Preview Modal */}
+      <SnapshotPreviewModal
+        isOpen={isSnapshotModalOpen}
+        onClose={() => setIsSnapshotModalOpen(false)}
+        snapshotDataUrl={snapshotDataUrl}
+        product={activeProduct}
+      />
+    </div>
+  );
+};

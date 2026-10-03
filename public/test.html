@@ -1,0 +1,19 @@
+
+<!DOCTYPE html>
+<html>
+<body>
+<div id="output">Loading...</div>
+<script type="module">
+import * as THREE from "https://unpkg.com/three@0.170.0/build/three.module.js";
+import { GLTFLoader } from "https://unpkg.com/three@0.170.0/examples/jsm/loaders/GLTFLoader.js";
+
+const loader = new GLTFLoader();
+loader.load("/models/aviator/scene.gltf", (gltf) => {
+  document.getElementById("output").innerText = "SUCCESS: " + gltf.scene.children.length;
+}, undefined, (err) => {
+  document.getElementById("output").innerText = "ERROR: " + err.message;
+});
+</script>
+</body>
+</html>
+

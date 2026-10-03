@@ -1,0 +1,49 @@
+{
+  "name": "lumen-vision-vto",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -n \"API,VITE\" -c \"blue,green\" \"npm run server\" \"vite\"",
+    "dev:client": "vite",
+    "server": "tsx server/index.ts",
+    "build": "tsc && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@google/model-viewer": "^4.3.1",
+    "@mediapipe/camera_utils": "^0.3.1675466862",
+    "@mediapipe/face_mesh": "^0.4.1633559619",
+    "@mediapipe/tasks-vision": "^0.10.32",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "canvas-confetti": "^1.9.4",
+    "clsx": "^2.1.1",
+    "concurrently": "^10.0.5",
+    "cors": "^2.8.6",
+    "dotenv": "^18.0.4",
+    "express": "^5.2.1",
+    "facefilter": "^3.4.3",
+    "jeelizhelpers": "^2.1.2",
+    "jsdom": "^30.1.1",
+    "lucide-react": "^1.16.0",
+    "puppeteer": "^25.12.0",
+    "tailwind-merge": "^2.6.0",
+    "three": "^0.170.0"
+  },
+  "devDependencies": {
+    "@types/canvas-confetti": "^1.9.0",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@types/three": "^0.170.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.5.3",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tailwindcss": "^3.4.17",
+    "tsx": "^4.23.15",
+    "typescript": "^5.7.3",
+    "vite": "^6.2.0"
+  }
+}
