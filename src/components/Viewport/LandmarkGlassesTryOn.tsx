@@ -6,8 +6,10 @@ import type { JeelizGlassesTryOnProps } from './JeelizGlassesTryOn';
 import { loadEyewearCADModel } from '../../utils/cadModelManager';
 import { EyewearRig, eyewearPose, landmarkWorld, StableEyewearPose } from '../../utils/landmarkEyewear';
 import { generateStudioEnvironment } from '../../utils/environmentGenerator';
+import { openTryOnCamera, cameraErrorMessage } from '../../utils/cameraAccess';
+import { createFaceDetector } from '../../utils/faceDetector';
 
-export const LandmarkGlassesTryOn: React.FC<JeelizGlassesTryOnProps> = (props) => {
+export const LandmarkGlassesTryOn: React.FC<JeelizGlassesTryOnProps & { onCameraStateChange?: (message: string, error: string) => void }> = (props) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const backgroundRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
@@ -21,6 +23,7 @@ export const LandmarkGlassesTryOn: React.FC<JeelizGlassesTryOnProps> = (props) =
   const [error, setError] = useState('');
   const [detected, setDetected] = useState(false);
   const [fps, setFps] = useState(0);
+  useEffect(() => { propsRef.current.onCameraStateChange?.(status, error); }, [status, error]);
 
   useEffect(() => {
     const container = containerRef.current, background = backgroundRef.current, overlay = overlayRef.current;
@@ -111,6 +114,7 @@ export const LandmarkGlassesTryOn: React.FC<JeelizGlassesTryOnProps> = (props) =
             setDetected(true);
             const angles = new THREE.Euler().setFromQuaternion(pose.quaternion, 'YXZ');
             const frontal = Math.abs(angles.y) < .3 && Math.abs(angles.x) < .3 && Math.abs(angles.z) < .3;
+            if (!frontal) measurementSampler.reset();
             const faceMeasurements = frontal ? measurementSampler.add(landmarks, sourceWidth, sourceHeight) : undefined;
             propsRef.current.onStatsUpdate?.({ fps: currentFps, faceDetected: true, landmarksCount: landmarks.length,
               estimatedIpdMm: 63 + (fit?.ipdOffsetMm ?? 0), trackingConfidence: 0, depthOcclusionActive: true,
@@ -142,22 +146,17 @@ export const LandmarkGlassesTryOn: React.FC<JeelizGlassesTryOnProps> = (props) =
       try {
         const indices = await fetch('/tracking/face-triangles.json').then(response => { if (!response.ok) throw new Error('Face surface could not load'); return response.json(); });
         if (cancelled) return; faceGeometry.setIndex(indices);
-        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
-        if (cancelled) { stream.getTracks().forEach(track => track.stop()); return; }
+        stream = await openTryOnCamera(() => cancelled);
+        if (!stream) return;
         video.srcObject = stream; await video.play();
         if (cancelled) return; setStatus('Loading face landmarks…');
-        const files = await FilesetResolver.forVisionTasks('/tracking/wasm');
-        if (cancelled) return;
-        landmarker = await FaceLandmarker.createFromOptions(files, {
-          baseOptions: { modelAssetPath: '/tracking/face_landmarker.task', delegate: 'GPU' },
-          runningMode: 'VIDEO', numFaces: 1, minFaceDetectionConfidence: 0.6, minFacePresenceConfidence: 0.6, minTrackingConfidence: 0.6,
-        });
+        landmarker = await createFaceDetector('VIDEO');
         if (cancelled) { landmarker.close(); return; }
         window.clearTimeout(startupTimer); setStatus(''); propsRef.current.onLoadingChange?.(false); processFrame();
       } catch (e) {
-        stream?.getTracks().forEach(track => track.stop());
+        stream?.getTracks().forEach(track => track.stop()); video.pause(); video.srcObject = null;
         window.clearTimeout(startupTimer);
-        if (!cancelled) { setError(e instanceof Error ? e.message : 'Camera could not start'); setStatus(''); propsRef.current.onLoadingChange?.(false); }
+        if (!cancelled) { setError(cameraErrorMessage(e)); setStatus(''); propsRef.current.onLoadingChange?.(false); }
       }
     };
     start();
@@ -178,7 +177,7 @@ export const LandmarkGlassesTryOn: React.FC<JeelizGlassesTryOnProps> = (props) =
       if (cancelled) { rig.dispose(); return; }
       const old = rigRef.current;
       if (old) { root.remove(old.group); old.dispose(); }
-      rigRef.current = rig; root.add(rig.group); setError('');
+      rigRef.current = rig; root.add(rig.group);
       overlayRef.current?.setAttribute('data-loaded-model', props.product.id);
     }).catch(e => { if (!cancelled) setError(String(e)); });
     return () => { cancelled = true; };
@@ -210,7 +209,7 @@ export const LandmarkGlassesTryOn: React.FC<JeelizGlassesTryOnProps> = (props) =
     </div>}
     {status && !error && <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/70 text-sm text-white">{status}</div>}
     {error && <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-4 bg-black/90 p-6 text-white">
-      <p className="text-sm text-center">{error}</p><button className="rounded-lg bg-white px-4 py-2 text-black" onClick={() => setRetry(value => value + 1)}>Retry camera</button>
+      <p className="text-sm text-center" role="alert">{error}</p><button className="rounded-lg bg-white px-4 py-2 text-black" onClick={() => setRetry(value => value + 1)}>Retry camera</button><button className="text-sm underline" onClick={() => props.onSwitchMode?.('photo')}>Use a photo instead</button>
     </div>}
   </div>;
 };

@@ -60,18 +60,18 @@ export class StableEyewearPose {
       // every tiny shake for a deliberate fast turn.
       this.velocity.lerp(derivative, alpha(2));
       // Quiet poses are damped; deliberate turns raise the cutoff immediately.
-      this.rotation.slerp(pose.quaternion, alpha(.75 + Math.max(0, this.velocity.length() - .08) * 8));
+      this.rotation.slerp(pose.quaternion, alpha(.55 + Math.max(0, this.velocity.length() - .08) * 8));
       this.localAnchor.lerp(offset, alpha(.7));
       // Signed derivatives prevent alternating noise from opening the filter.
       this.spanVelocity += ((pose.eyeSpan - this.previousSpan) / Math.max(8, this.previousSpan) / dt - this.spanVelocity) * alpha(2);
       const scaleResidual = Math.abs(pose.eyeSpan - this.span) / Math.max(8, this.span);
-      this.span += (pose.eyeSpan - this.span) * alpha(.8 + Math.max(0, Math.abs(this.spanVelocity) - .02) * 20 + Math.max(0, scaleResidual - .01) * 120);
+      this.span += (pose.eyeSpan - this.span) * alpha(.65 + Math.max(0, Math.abs(this.spanVelocity) - .02) * 20 + Math.max(0, scaleResidual - .01) * 120);
       const bridgeDerivative = pose.bridge.clone().sub(this.previousBridge).divideScalar(dt * pose.eyeSpan);
       this.bridgeVelocity.lerp(bridgeDerivative, alpha(2));
       const speed = this.bridgeVelocity.length();
       const displacement = this.bridge!.distanceTo(pose.bridge) / pose.eyeSpan;
       // The residual opens response for a sudden move even before velocity settles.
-      const cutoff = .85 + Math.max(0, speed - .025) * 18 + Math.max(0, displacement - .015) * 100;
+      const cutoff = .65 + Math.max(0, speed - .025) * 18 + Math.max(0, displacement - .015) * 100;
       this.bridge!.lerp(pose.bridge, alpha(cutoff));
     }
     this.previousBridge.copy(pose.bridge);
@@ -91,6 +91,53 @@ export class StableEyewearPose {
 
 interface RigMesh { mesh: THREE.Mesh; source: Float32Array }
 
+// Trim the AR copy in model space, before arm deformation. This also handles
+// imported CAD files whose front and hooked arms share a single mesh/material.
+export function trimTryOnTempleTips(geometry: THREE.BufferGeometry, depths: readonly number[]): THREE.BufferGeometry {
+  const position = geometry.getAttribute('position');
+  let needsTrim = false;
+  for (let i = 0; i < position.count; i++) {
+    if (position.getZ(i) < depths[position.getX(i) < 0 ? 0 : 1]) { needsTrim = true; break; }
+  }
+  if (!needsTrim) return geometry.clone();
+  const attributes = Object.entries(geometry.attributes);
+  const output = new Map(attributes.map(([name]) => [name, [] as number[]]));
+  const index = geometry.index;
+  const count = index?.count ?? position.count;
+  const result = new THREE.BufferGeometry();
+  type Vertex = Record<string, number[]>;
+  const read = (i: number): Vertex => Object.fromEntries(attributes.map(([name, attribute]) =>
+    [name, Array.from({ length: attribute.itemSize }, (_, component) => attribute.getComponent(i, component))]));
+  const groups = geometry.groups.length ? geometry.groups : [{ start: 0, count, materialIndex: 0 }];
+  for (const group of groups) {
+    const start = output.get('position')!.length / 3;
+    for (let offset = group.start; offset + 2 < Math.min(count, group.start + group.count); offset += 3) {
+      const triangle = [0, 1, 2].map(n => read(index ? index.getX(offset + n) : offset + n));
+      const side = triangle.reduce((sum, v) => sum + v.position[0], 0) < 0 ? 0 : 1;
+      const cutoff = depths[side];
+      const polygon: Vertex[] = [];
+      for (let i = 0; i < 3; i++) {
+        const a = triangle[i], b = triangle[(i + 1) % 3];
+        const insideA = a.position[2] >= cutoff, insideB = b.position[2] >= cutoff;
+        if (insideA) polygon.push(a);
+        if (insideA !== insideB) {
+          const t = (cutoff - a.position[2]) / (b.position[2] - a.position[2]);
+          polygon.push(Object.fromEntries(attributes.map(([name]) => [name, a[name].map((value, j) => value + (b[name][j] - value) * t)])));
+        }
+      }
+      for (let i = 1; i + 1 < polygon.length; i++) {
+        for (const vertex of [polygon[0], polygon[i], polygon[i + 1]]) {
+          for (const [name] of attributes) output.get(name)!.push(...vertex[name]);
+        }
+      }
+    }
+    result.addGroup(start, output.get('position')!.length / 3 - start, group.materialIndex);
+  }
+  for (const [name, attribute] of attributes) result.setAttribute(name, new THREE.Float32BufferAttribute(output.get(name)!, attribute.itemSize));
+  result.computeBoundingBox(); result.computeBoundingSphere();
+  return result;
+}
+
 // Each AR instance owns baked geometry. Never deform the showroom/cache geometry.
 export class EyewearRig {
   readonly group = new THREE.Group();
@@ -105,19 +152,29 @@ export class EyewearRig {
   constructor(model: THREE.Group) {
     model.updateMatrixWorld(true);
     let innerLensEdge = Infinity;
+    const rawLensBounds = [new THREE.Box3(), new THREE.Box3()];
     model.traverse(object => {
       if (!(object instanceof THREE.Mesh) || !/lens/i.test(object.name)) return;
       const positions = object.geometry.getAttribute('position');
       for (let i = 0; i < positions.count; i++) {
         const point = new THREE.Vector3().fromBufferAttribute(positions, i).applyMatrix4(object.matrixWorld);
         innerLensEdge = Math.min(innerLensEdge, Math.abs(point.x));
+        rawLensBounds[point.x < 0 ? 0 : 1].expandByPoint(point);
       }
     });
     // Separate lenses translate rigidly; only the bridge between them stretches.
     // Continuous shield lenses crossing the nose keep their original geometry.
-    const bridgeExpansion = model.userData?.bridgeExpansion !== undefined
+    const rawEyeDistance = rawLensBounds.some(box => box.isEmpty()) ? 0 : rawLensBounds[0].getCenter(new THREE.Vector3()).distanceTo(rawLensBounds[1].getCenter(new THREE.Vector3()));
+    // A fixed expansion misses narrow imported aviators. Enforce a 0.26 gap /
+    // eye-spacing ratio for two separate lenses (about 16 mm at a 63 mm IPD).
+    // Translate lenses rigidly, stretch only the central bridge, and leave
+    // continuous shield lenses crossing the nose untouched.
+    const minimumExpansion = innerLensEdge > .05 && rawEyeDistance > 0
+      ? THREE.MathUtils.clamp((.26 * rawEyeDistance - 2 * innerLensEdge) / (2 * (1 - .26)), 0, .55) : 0;
+    const defaultExpansion = model.userData?.bridgeExpansion !== undefined
       ? model.userData.bridgeExpansion
       : (Number.isFinite(innerLensEdge) && innerLensEdge > .2 ? .16 : 0);
+    const bridgeExpansion = Math.max(defaultExpansion, minimumExpansion);
     const left = new THREE.Box3(), right = new THREE.Box3();
     model.traverse(object => {
       if (!(object instanceof THREE.Mesh) || object.name === 'contact-shadow') return;
@@ -179,6 +236,20 @@ export class EyewearRig {
     this.frontWidth = front.isEmpty() ? 8.8 : Math.max(1, front.max.x - front.min.x);
     this.eyeDistance = left.isEmpty() || right.isEmpty() ? 4.4 :
       left.getCenter(new THREE.Vector3()).distanceTo(right.getCenter(new THREE.Vector3()));
+    // End the visible straight arm slightly ahead of the ear-rest section.
+    // Retain the original full-model fit anchors and sizing above: removing a
+    // hook must never change the eye alignment, landmark pose or scale filter.
+    const cutoffs = this.tails.map((tail, side) => {
+      if (!Number.isFinite(back[side]) || back[side] >= this.hingeDepth) return -Infinity;
+      const contactDepth = Math.max(tail.z, contacts[side]);
+      return this.hingeDepth + (contactDepth - this.hingeDepth) * .85;
+    });
+    for (const entry of this.meshes) {
+      const original = entry.mesh.geometry;
+      entry.mesh.geometry = trimTryOnTempleTips(original, cutoffs);
+      entry.source = new Float32Array(entry.mesh.geometry.getAttribute('position').array);
+      original.dispose();
+    }
   }
   fittedScale(eyeSpan: number, faceWidth: number) {
     // Smooth proportions only; distance and pose remain immediate.

@@ -1,4 +1,6 @@
 import express from 'express';
+import 'dotenv/config';
+import photoRouter from './routes/photo.js';
 import cors from 'cors';
 import productsRouter from './routes/products.js';
 import recommendationRouter from './routes/recommendation.js';
@@ -41,6 +43,7 @@ export function createServer() {
 
   // API Route Mounts
   app.use('/api/products', productsRouter);
+  app.use('/api/photo', photoRouter);
   app.use('/api/recommendations', recommendationRouter);
   app.use('/api/cart', cartRouter);
   app.use('/api/stores', storesRouter);

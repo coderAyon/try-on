@@ -45,7 +45,12 @@ const puppeteer = require('puppeteer'), fs = require('fs');
           }
           const lens = new THREE.Box3(); rig.group.traverse(m => { if (m.isMesh && /lens/i.test(m.name)) lens.union(new THREE.Box3().setFromObject(m, true)); });
           const centre = lens.isEmpty() ? null : lens.getCenter(new THREE.Vector3()).toArray();
-          if (centre && (Math.abs(centre[0]) > .08 || Math.abs(centre[1]) > .08 || Math.abs(centre[2]) > .12)) throw Error('Lens anchor displaced: ' + product.id + JSON.stringify(centre));
+          // Procedural convex lenses intentionally extend 0.32 units forward.
+          if (centre && (Math.abs(centre[0]) > .08 || Math.abs(centre[1]) > .08 || Math.abs(centre[2]) > .2)) throw Error('Lens anchor displaced: ' + product.id + JSON.stringify(centre));
+          let innerEdge = Infinity;
+          rig.group.traverse(m => { if (m.isMesh && /lens/i.test(m.name)) { const p = m.geometry.attributes.position; for (let i = 0; i < p.count; i++) innerEdge = Math.min(innerEdge, Math.abs(p.getX(i))); } });
+          const gapRatio = Number.isFinite(innerEdge) && innerEdge > .05 ? 2 * innerEdge / rig.eyeDistance : null;
+          if (gapRatio !== null && gapRatio < .255) throw Error('Narrow bridge clearance: ' + product.id + ' / ' + gapRatio);
           const scene = new THREE.Scene(); scene.environment = env.texture; scene.add(new THREE.HemisphereLight(0xffffff, 0x716a60, 1.2));
           const key = new THREE.DirectionalLight(0xffffff, 1.5); key.position.set(-100, 200, 600); scene.add(key);
           const skin = new THREE.Mesh(surface, skinMat); skin.renderOrder = -10; scene.add(skin);
@@ -70,7 +75,7 @@ const puppeteer = require('puppeteer'), fs = require('fs');
             renderer.render(scene, camera);
             panels.push({ face, id: product.id, name: product.name, pose: label, data: renderer.domElement.toDataURL() });
           }
-          checks.push({ face, id: product.id, frontWidth: rig.frontWidth, eyeDistance: rig.eyeDistance, lensCentre: centre, poses: 6 });
+          checks.push({ face, id: product.id, frontWidth: rig.frontWidth, eyeDistance: rig.eyeDistance, lensCentre: centre, gapRatio, poses: 6 });
           rig.dispose(); skull.geometry.dispose(); skull.material.dispose();
         }
         surface.dispose(); skinMat.dispose(); texture.dispose();

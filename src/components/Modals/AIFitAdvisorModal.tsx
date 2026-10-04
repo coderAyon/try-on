@@ -16,12 +16,19 @@ function ShapePreview({ shape }: { shape: FrameShape }) {
   return <svg viewBox="0 0 110 48" width="110" height="48" aria-label={shape + ' frame preview'}><g fill="#ddd0ef" stroke="#88729e" strokeWidth="2" strokeLinejoin="round"><path d={paths[shape]} /><path d={paths[shape]} transform="translate(56 0)" /><path d="M44 20q8-5 14 0" fill="none" /></g></svg>;
 }
 
-interface Props { isOpen: boolean; onClose: () => void; onSelectProduct: (product: SunglassesProduct) => void; stats: TrackingStats; products: SunglassesProduct[] }
-export const AIFitAdvisorModal: React.FC<Props> = ({ isOpen, onClose, onSelectProduct, stats, products }) => {
+interface Props { isOpen: boolean; onClose: () => void; onSelectProduct: (product: SunglassesProduct) => void; stats: TrackingStats; products: SunglassesProduct[]; cameraEnabled: boolean; onEnableCamera: () => void; activeProduct: SunglassesProduct; mirror: boolean; cameraMessage: string; cameraError: string }
+export const AIFitAdvisorModal: React.FC<Props> = ({ isOpen, onClose, onSelectProduct, stats, products, cameraEnabled, onEnableCamera, activeProduct, mirror, cameraMessage, cameraError }) => {
   const [measurement, setMeasurement] = useState<FaceMeasurements | null>(null);
+  const baseline = useRef(0);
+  const scanStarted = useRef(0);
+  const [progress, setProgress] = useState(0);
+  const before = useRef<HTMLCanvasElement>(null);
+  const after = useRef<HTMLCanvasElement>(null);
+  const startScan = () => { baseline.current = stats.faceMeasurements?.samples ?? 0; scanStarted.current = Date.now(); setProgress(0); setMeasurement(null); };
   const panel = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!isOpen) { setMeasurement(null); return; }
+    startScan();
     const previous = document.activeElement as HTMLElement;
     const overflow = document.body.style.overflow; document.body.style.overflow = 'hidden';
     panel.current?.querySelector<HTMLButtonElement>('button')?.focus();
@@ -29,8 +36,34 @@ export const AIFitAdvisorModal: React.FC<Props> = ({ isOpen, onClose, onSelectPr
   }, [isOpen]);
   useEffect(() => {
     const m = stats.faceMeasurements;
-    if (isOpen && !measurement && stats.faceDetected && m && m.samples >= 8 && Date.now() - m.measuredAt < 2000) setMeasurement({ ...m });
-  }, [isOpen, stats, measurement]);
+    if (!isOpen || measurement) return;
+    if (!cameraEnabled || !stats.faceDetected || !m) { baseline.current = 0; setProgress(0); return; }
+    if (m.samples < baseline.current) baseline.current = 0;
+    const samples = m.samples - baseline.current;
+    setProgress(Math.min(100, Math.round(samples / 12 * 100)));
+    if (samples >= 12 && m.measuredAt > scanStarted.current && Date.now() - m.measuredAt < 1000) setMeasurement({ ...m });
+  }, [isOpen, stats, measurement, cameraEnabled]);
+  useEffect(() => {
+    if (!isOpen) return;
+    let frame = 0;
+    const draw = () => {
+      const source = document.getElementById('landmarkCameraCanvas') as HTMLCanvasElement | null;
+      const glasses = document.getElementById('landmarkGlassesCanvas') as HTMLCanvasElement | null;
+      if (source && glasses) for (const [target, overlay] of [[before.current, false], [after.current, true]] as const) {
+        if (!target) continue;
+        if (target.width !== source.width || target.height !== source.height) { target.width = source.width; target.height = source.height; }
+        const ctx = target.getContext('2d');
+        if (!ctx) continue;
+        ctx.save(); ctx.clearRect(0, 0, target.width, target.height);
+        if (mirror) { ctx.translate(target.width, 0); ctx.scale(-1, 1); }
+        ctx.drawImage(source, 0, 0);
+        if (overlay) ctx.drawImage(glasses, 0, 0, target.width, target.height);
+        ctx.restore();
+      }
+      frame = requestAnimationFrame(draw);
+    };
+    draw(); return () => cancelAnimationFrame(frame);
+  }, [isOpen, measurement, mirror]);
   if (!isOpen) return null;
   const result = measurement ? suggestFrames(measurement, products) : null;
   return <div className="fit-modal-backdrop" onClick={onClose}>
@@ -44,13 +77,16 @@ export const AIFitAdvisorModal: React.FC<Props> = ({ isOpen, onClose, onSelectPr
       }
     }}>
       <header className="fit-modal-header"><div><span className="section-eyebrow">AI-ASSISTED FACE FIT</span><h2 id="fit-title">Frames that complement you.</h2></div><button aria-label="Close fit advisor" onClick={onClose}><X size={20} /></button></header>
-      {!result ? <div className="fit-scan"><Sparkles size={32} /><h3>{stats.faceDetected ? 'Look straight into the camera' : 'Let the camera see your face'}</h3><p>Keep your face centred, with your forehead and jaw visible. Hold still for a moment while we measure your proportions.</p><span>{stats.faceDetected ? 'Collecting a clear front-facing sample...' : 'Waiting for live face tracking...'}</span></div> : <div className="fit-results">
-        <div className="fit-summary"><div><span className="detail-label">ESTIMATED FACE SHAPE</span><h3>{result.shape}</h3><p>{result.reason}</p></div><button onClick={() => setMeasurement(null)}><RefreshCw size={14} /> Scan again</button></div>
+      {!result ? <div className="fit-scan" aria-live="polite"><Sparkles size={32} /><h3>{!cameraEnabled ? 'Allow your camera to find your fit' : stats.faceDetected ? 'Look straight into the camera' : 'Let the camera see your face'}</h3><p>Keep your face centred, with your forehead and jaw visible. Hold still while we collect 12 new front-facing measurements. Results appear only after this scan.</p>{!cameraEnabled ? <button className="frame-capture" onClick={onEnableCamera}>Allow camera & analyze my face</button> : <><canvas ref={before} className="fit-live-preview" aria-label="Live camera preview" /><progress max={100} value={progress} aria-label="Face analysis progress" /><span>{cameraError || cameraMessage || (stats.faceDetected ? `Analyzing your face: ${progress}%` : 'Centre your face in the live preview.')}</span><button className="frame-capture" onClick={() => { startScan(); onEnableCamera(); }}>Restart camera</button></>}</div> : <div className="fit-results">
+        <div className="fit-summary"><div><span className="detail-label">ESTIMATED FACE SHAPE</span><h3>{result.shape}</h3><p>{result.reason}</p></div><button onClick={startScan}><RefreshCw size={14} /> Scan again</button></div>
+        <h3 className="fit-section-title">Your face, side by side</h3>
+        <div className="fit-comparison"><figure><canvas ref={before} /><figcaption>Without frames</figcaption></figure><figure><canvas ref={after} /><figcaption>With {activeProduct.name}</figcaption></figure></div>
+        <p className="fit-comparison-note">Select a recommended frame below to compare it live on your face. {stats.faceDetected ? 'Live face detected.' : 'Face tracking paused — centre your face to resume.'}</p>
         <div className="fit-ratios"><span>Face length / width <strong>{measurement!.heightToWidth.toFixed(2)}</strong></span><span>Jaw / cheek <strong>{measurement!.jawToCheek.toFixed(2)}</strong></span><span>Forehead / cheek <strong>{measurement!.foreheadToCheek.toFixed(2)}</strong></span></div>
         <h3 className="fit-section-title">Suggested frame shapes</h3>
         <div className="fit-shapes">{result.shapes.map(shape => <div key={shape}><ShapePreview shape={shape} /><span>{shape === 'Flat' ? 'Soft flat / browline' : shape}</span></div>)}</div>
         <h3 className="fit-section-title">Try these on your face</h3>
-        <div className="fit-products">{result.frames.map(({ product, shape }) => <button key={product.id} data-fit-product={product.id} onClick={() => { onSelectProduct(product); onClose(); }}><ProductThumbnail product={product} /><span className="detail-label">{shape} frame</span><h4>{product.name}</h4><span className="fit-try">Try on <ArrowRight size={13} /></span></button>)}</div>
+        <div className="fit-products">{result.frames.map(({ product, shape }) => <button key={product.id} data-fit-product={product.id} aria-pressed={activeProduct.id === product.id} onClick={() => onSelectProduct(product)}><ProductThumbnail product={product} /><span className="detail-label">{shape} frame</span><h4>{product.brand} · {product.name}</h4><p>{result.shape} styling match: {result.reason}</p><p>{product.frameMaterial} · {product.polarized ? 'Polarized' : 'Non-polarized'} · {product.uvProtection}</p><p>Lens {product.dimensions.lensWidth} mm · Bridge {product.dimensions.bridgeWidth} mm · Temple {product.dimensions.templeLength} mm</p><span className="fit-try">{activeProduct.id === product.id ? 'Comparing now' : 'Compare on my face'} <ArrowRight size={13} /></span></button>)}</div>
       </div>}
       <footer>Measured on your device using MediaPipe face landmarks. Shape suggestions are styling estimates; no face photo is uploaded for this analysis.</footer>
     </div>

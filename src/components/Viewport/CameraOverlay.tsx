@@ -13,7 +13,6 @@ interface CameraOverlayProps {
 
 export const CameraOverlay: React.FC<CameraOverlayProps> = ({
   mode,
-  faceDetected,
   onFileUpload,
   isLoading,
   customPhotoUrl,
@@ -34,16 +33,6 @@ export const CameraOverlay: React.FC<CameraOverlayProps> = ({
 
   return (
     <div className="absolute inset-0 pointer-events-none z-10 flex flex-col justify-between p-4 select-none">
-      {/* Searching Indicator in webcam mode */}
-      {mode === 'webcam' && !isLoading && !faceDetected && (
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-          <div className="glass-panel px-4 py-2 rounded-full text-xs font-mono text-neutral-300 border border-neutral-700/80 shadow-2xl flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
-            <span>Align Face in View</span>
-          </div>
-        </div>
-      )}
-
       {/* Sunglass Hut Model Selector Strip in Photo Portrait Mode */}
       {mode === 'photo' && (
         <div className="absolute top-16 inset-x-4 flex items-center justify-center pointer-events-auto z-20">

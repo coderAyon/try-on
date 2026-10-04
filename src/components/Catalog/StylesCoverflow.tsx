@@ -3,7 +3,7 @@ import { ArrowLeft, ArrowRight, Pause, Play } from 'lucide-react';
 import { SunglassesProduct } from '../../types';
 import { ProductThumbnail } from './ProductThumbnail';
 
-export function StylesCoverflow({ products, activeId, onSelect }: { products: SunglassesProduct[]; activeId: string; onSelect: (product: SunglassesProduct) => void }) {
+export function StylesCoverflow({ products, activeId, onSelect, onViewDetails }: { products: SunglassesProduct[]; activeId: string; onSelect: (product: SunglassesProduct) => void; onViewDetails: (product: SunglassesProduct) => void }) {
   const [index, setIndex] = useState(0);
   const [paused, setPaused] = useState(false);
   const [interacting, setInteracting] = useState(false);
@@ -41,12 +41,15 @@ export function StylesCoverflow({ products, activeId, onSelect }: { products: Su
       Array.from(container.children).forEach((node, i) => { const card = node as HTMLElement; const d = Math.abs(card.offsetLeft - left); if (d < distance) { distance = d; nearest = i; } });
       setIndex(nearest);
     }}>
-      {products.map((product, i) => <button key={product.id} data-product-id={product.id} className="style-card group" aria-pressed={product.id === activeId} onClick={() => { setIndex(i); onSelect(product); }}>
+      {products.map((product, i) => <div key={product.id} data-product-id={product.id} className="style-card group" data-selected={product.id === activeId}>
+        <button className="card-try-on" aria-label={`Try on ${product.name}`} aria-pressed={product.id === activeId} onClick={() => { setIndex(i); onSelect(product); }}>
         <span className="card-brand">{product.brand === 'Model Library' ? 'STUDIO COLLECTION' : product.brand}</span>
         <div className="card-preview"><ProductThumbnail product={product} /></div>
-        <div className="card-caption"><h4>{product.name}</h4><span className="card-status">{product.id === activeId ? 'Trying on' : 'Try on'}<ArrowRight size={12} /></span></div>
-      </button>)}
+        <div className="card-caption"><h4>{product.name}</h4></div>
+        </button>
+        <button className="card-details-button" aria-label={`View details for ${product.name}`} onClick={() => onViewDetails(product)}>View details<ArrowRight size={15} /></button>
+      </div>)}
     </div>
-    <div className="slider-bottom"><span>Slide to explore · select a frame to try it on</span><span>{String(index + 1).padStart(2, '0')} / {products.length}</span></div>
+    <div className="slider-bottom"><span>Click a frame to try it on · View details for the 3D studio</span><span>{String(index + 1).padStart(2, '0')} / {products.length}</span></div>
   </div>;
 }

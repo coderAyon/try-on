@@ -26,6 +26,11 @@ import { LIGHTING_PRESETS } from '../../data/catalog';
 import { soundEffects } from '../../utils/audio';
 
 interface ViewportContainerProps {
+  cameraSession: number;
+  onCameraStateChange: (message: string, error: string) => void;
+  cameraEnabled: boolean;
+  onEnableCamera: () => void;
+  onStopCamera: () => void;
   product: SunglassesProduct;
   variantIndex: number;
   mode: TryOnMode;
@@ -48,6 +53,8 @@ interface ViewportContainerProps {
 }
 
 export const ViewportContainer: React.FC<ViewportContainerProps> = ({
+  cameraSession, onCameraStateChange,
+  cameraEnabled, onEnableCamera, onStopCamera,
   product,
   variantIndex,
   mode,
@@ -130,21 +137,6 @@ export const ViewportContainer: React.FC<ViewportContainerProps> = ({
           <button
             onClick={() => {
               soundEffects.playClick();
-              onModeChange('demo');
-            }}
-            className={`flex items-center gap-2 px-3.5 sm:px-4 py-2 rounded-xl text-xs font-semibold tracking-wide transition-all cursor-pointer ${
-              mode === 'demo'
-                ? 'bg-[#e6d8f5] text-[#5f437d] shadow-sm'
-                : 'text-[#93859f] hover:text-[#5f437d]'
-            }`}
-          >
-            <Box className="w-3.5 h-3.5" />
-            <span>3D studio</span>
-          </button>
-
-          <button
-            onClick={() => {
-              soundEffects.playClick();
               onModeChange('photo');
             }}
             className={`flex items-center gap-2 px-3.5 sm:px-4 py-2 rounded-xl text-xs font-semibold tracking-wide transition-all cursor-pointer ${
@@ -169,11 +161,13 @@ export const ViewportContainer: React.FC<ViewportContainerProps> = ({
       <div
         ref={mirrorContainerRef}
         onPointerMove={isSplitActive ? handleSplitPointerMove : undefined}
-        className="relative w-full aspect-[4/3] sm:aspect-[16/9] bg-[#edf0f6] rounded-3xl overflow-hidden border border-[#e6dfef] shadow-[0_12px_40px_rgba(116,90,144,0.08)] flex items-center justify-center group"
+        className="fitting-viewport relative w-full aspect-[4/3] sm:aspect-[16/9] bg-[#edf0f6] rounded-3xl overflow-hidden border border-[#e6dfef] shadow-[0_12px_40px_rgba(116,90,144,0.08)] flex items-center justify-center group"
       >
         {/* Webcam mode: Jeeliz FaceFilter (6DOF, rock-solid face-locked glasses) */}
-        {mode === 'webcam' ? (
+        {mode === 'webcam' && !cameraEnabled ? <div className="fit-scan"><Camera size={32} /><h3>Your camera is off</h3><p>Allow camera access to try frames on your face. Your browser may ask for permission. You can stop the camera at any time.</p><button className="frame-capture" onClick={onEnableCamera}>Allow camera & start try-on</button></div> : mode === 'webcam' ? (
             <LandmarkGlassesTryOn
+            key={cameraSession}
+            onCameraStateChange={onCameraStateChange}
             mirror={mirror}
             product={product}
             variantIndex={variantIndex}
@@ -208,7 +202,7 @@ export const ViewportContainer: React.FC<ViewportContainerProps> = ({
         )}
 
         {/* Viewport UI Guides & Photo Dropzone */}
-        {mode !== 'demo' && <CameraOverlay
+        {mode !== 'demo' && (mode !== 'webcam' || cameraEnabled) && <CameraOverlay
           mode={mode}
           faceDetected={stats.faceDetected}
           onFileUpload={onFileUpload}
@@ -245,9 +239,10 @@ export const ViewportContainer: React.FC<ViewportContainerProps> = ({
         {/* Top Viewport Bar removed for minimal UI */}
 
         {/* Bottom Floating Control Bar */}
-        <div className="absolute bottom-4 inset-x-4 sm:inset-x-6 z-30 flex items-center justify-between pointer-events-none">
+        {(mode !== 'webcam' || cameraEnabled) && <div className="absolute bottom-4 inset-x-4 sm:inset-x-6 z-30 flex items-center justify-between pointer-events-none">
           {/* Left Controls removed for minimal UI */}
           <div className="flex items-center gap-2 pointer-events-auto">
+            {mode === 'webcam' && cameraEnabled && <button className="frame-capture" onClick={onStopCamera}>Stop camera</button>}
           </div>
 
           {/* Right: Lighting Selector & Shutter Snapshot */}
@@ -298,7 +293,7 @@ export const ViewportContainer: React.FC<ViewportContainerProps> = ({
               <span>Capture Look</span>
             </button>
           </div>
-        </div>
+        </div>}
       </div>
 
       {/* 3. Academic Computer Vision & Telemetry Modal */}
