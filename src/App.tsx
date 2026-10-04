@@ -291,7 +291,7 @@ export const App: React.FC = () => {
                 ))}
               </div>
             </div>
-            <button className="frame-capture" onClick={handleCaptureSnapshot}>
+            <button className="frame-capture frame-save-look" onClick={handleCaptureSnapshot}>
               <span>Save this look</span>
               <ArrowUpRight size={14} />
             </button>

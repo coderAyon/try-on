@@ -50,14 +50,17 @@ export const LandmarkGlassesTryOn: React.FC<JeelizGlassesTryOnProps & { onCamera
     const skullGeometry = new THREE.SphereGeometry(1, 32, 24);
     const skull = new THREE.Mesh(skullGeometry, depthMaterial); skull.renderOrder = -10; root.add(skull);
     let width = 1, height = 1;
+    const ctx = background.getContext('2d');
     const resize = () => {
       width = Math.max(1, Math.round(container.clientWidth)); height = Math.max(1, Math.round(container.clientHeight));
-      background.width = width; background.height = height;
+      const pixelRatio = Math.min(devicePixelRatio, 2);
+      background.width = Math.round(width * pixelRatio); background.height = Math.round(height * pixelRatio);
+      ctx?.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+      if (ctx) { ctx.filter = 'none'; ctx.imageSmoothingQuality = 'high'; }
       renderer.setSize(width, height, false);
       camera.left = -width / 2; camera.right = width / 2; camera.top = height / 2; camera.bottom = -height / 2; camera.updateProjectionMatrix();
     };
     resize(); const observer = new ResizeObserver(resize); observer.observe(container);
-    const ctx = background.getContext('2d');
     let lastVideoTime = -1, lastUi = 0, counted = 0, fpsStart = performance.now(), currentFps = 0;
     let lostFrames = 0;
     const measurementSampler = new FaceMeasurementSampler();

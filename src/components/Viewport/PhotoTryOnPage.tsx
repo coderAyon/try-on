@@ -6,7 +6,7 @@ import { EyewearRig, eyewearPose, landmarkWorld } from '../../utils/landmarkEyew
 import { generateStudioEnvironment } from '../../utils/environmentGenerator';
 import { SunglassesProduct } from '../../types';
 import { ProductThumbnail } from '../Catalog/ProductThumbnail';
-import { ArrowLeft, Upload, Download, X, ImagePlus, Glasses, Sparkles, CheckCircle2, AlertTriangle, User, Globe } from 'lucide-react';
+import { ArrowLeft, Upload, Download, X, ImagePlus, Glasses, Sparkles, CheckCircle2, AlertTriangle, User, Globe, ScanFace, Maximize2 } from 'lucide-react';
 
 interface PhotoTryOnPageProps {
   products: SunglassesProduct[];
@@ -17,9 +17,59 @@ interface PhotoTryOnPageProps {
 
 type FaceVerificationStatus = 'idle' | 'checking' | 'detected' | 'no_face' | 'multiple_faces';
 
+function createContactShadowTexture(): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 256;
+  const ctx = canvas.getContext('2d')!;
+  const grad = ctx.createRadialGradient(128, 128, 8, 128, 128, 120);
+  grad.addColorStop(0, 'rgba(20, 15, 12, 0.40)');
+  grad.addColorStop(0.35, 'rgba(30, 22, 18, 0.22)');
+  grad.addColorStop(0.7, 'rgba(45, 30, 24, 0.08)');
+  grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(128, 128, 128, 0, Math.PI * 2);
+  ctx.fill();
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+function applyPhotographicClarity(ctx: CanvasRenderingContext2D, width: number, height: number, amount = 0.22) {
+  try {
+    const imgData = ctx.getImageData(0, 0, width, height);
+    const data = imgData.data;
+    const copy = new Uint8ClampedArray(data);
+    const w = width;
+    const h = height;
+    const k = amount;
+    for (let y = 1; y < h - 1; y++) {
+      const row = y * w;
+      for (let x = 1; x < w - 1; x++) {
+        const idx = (row + x) * 4;
+        const up = ((y - 1) * w + x) * 4;
+        const down = ((y + 1) * w + x) * 4;
+        const left = (row + x - 1) * 4;
+        const right = (row + x + 1) * 4;
+        for (let c = 0; c < 3; c++) {
+          const val = copy[idx + c];
+          const laplacian = 4 * val - copy[up + c] - copy[down + c] - copy[left + c] - copy[right + c];
+          const delta = Math.max(-28, Math.min(28, laplacian * k));
+          data[idx + c] = Math.min(255, Math.max(0, val + delta));
+        }
+      }
+    }
+    ctx.putImageData(imgData, 0, 0);
+  } catch {}
+}
+
 export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTryOnPageProps) {
   const [photo, setPhoto] = useState<string | null>(null);
   const [result, setResult] = useState<string | null>(null);
+  const [faceCropResult, setFaceCropResult] = useState<string | null>(null);
+  const [faceCropOriginal, setFaceCropOriginal] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<'full' | 'face'>('full');
   const [filename, setFilename] = useState('Your photo');
   const [link, setLink] = useState('');
   const [busy, setBusy] = useState(false);
@@ -96,6 +146,9 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
     setPhoto(currentUrl);
     setFilename(name);
     setResult(null); // Clear previous result so user can click "Try on"
+    setFaceCropResult(null);
+    setFaceCropOriginal(null);
+    setViewMode('full');
     setError('');
     checkFaceInPhoto(currentUrl, currentId);
   };
@@ -175,7 +228,7 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
     }
   };
 
-  // Run 3D glasses fitting on the photo only when user clicks "Try on"
+  // Run 3D glasses fitting on the photo with Ultra-HD super-sampling and unified background rendering
   const handleTryOn = async () => {
     if (!photo) {
       fileInputRef.current?.click();
@@ -197,6 +250,9 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
     let env: THREE.WebGLRenderTarget | null = null;
     let geometry: THREE.BufferGeometry | null = null;
     let material: THREE.Material | null = null;
+    let skullGeometry: THREE.BufferGeometry | null = null;
+    let bgTexture: THREE.CanvasTexture | null = null;
+    let shadowTexture: THREE.CanvasTexture | null = null;
 
     try {
       const image = new Image();
@@ -204,32 +260,56 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
       await image.decode();
       if (runId !== activeRun.current) return;
 
-      const scale = Math.min(1, 4096 / Math.max(image.naturalWidth, image.naturalHeight));
-      const width = Math.round(image.naturalWidth * scale);
-      const height = Math.round(image.naturalHeight * scale);
-
-      const input = document.createElement('canvas');
-      input.width = width;
-      input.height = height;
-      const ctx = input.getContext('2d');
-      if (!ctx) throw Error('Photo processing unavailable.');
-      ctx.drawImage(image, 0, 0, width, height);
-
+      // 1. Fast & accurate face landmark detection on optimized analysis buffer
       task = await createFaceDetector('IMAGE', 2);
       if (runId !== activeRun.current) return;
 
-      const analysis = document.createElement('canvas');
-      const analysisScale = Math.min(1, 1600 / Math.max(width, height));
-      analysis.width = Math.round(width * analysisScale);
-      analysis.height = Math.round(height * analysisScale);
-      analysis.getContext('2d')!.drawImage(input, 0, 0, analysis.width, analysis.height);
+      const detectionScale = Math.min(1, 1600 / Math.max(image.naturalWidth, image.naturalHeight));
+      const detCanvas = document.createElement('canvas');
+      detCanvas.width = Math.round(image.naturalWidth * detectionScale);
+      detCanvas.height = Math.round(image.naturalHeight * detectionScale);
+      const detCtx = detCanvas.getContext('2d')!;
+      detCtx.drawImage(image, 0, 0, detCanvas.width, detCanvas.height);
 
-      const faces = task.detect(analysis).faceLandmarks;
+      const faces = task.detect(detCanvas).faceLandmarks;
       if (faces.length !== 1) {
         throw Error(faces.length ? 'Use a photo with one face.' : 'No face detected. Use a clear photo with both eyes visible.');
       }
-
       const points = faces[0];
+
+      // Calculate normalized face bounding box
+      let minX = 1, maxX = 0, minY = 1, maxY = 0;
+      for (let i = 0; i < 468; i++) {
+        minX = Math.min(minX, points[i].x);
+        maxX = Math.max(maxX, points[i].x);
+        minY = Math.min(minY, points[i].y);
+        maxY = Math.max(maxY, points[i].y);
+      }
+      const faceNormWidth = Math.max(0.08, maxX - minX);
+
+      // 2. High-Definition Super-Sampling Dimension Calculation
+      // Guarantee face region has at least 380px across for razor-sharp CAD geometry & curves
+      const minScaleForFace = 380 / (faceNormWidth * image.naturalWidth);
+      // Guarantee overall longest dimension is at least 2048px (unless original is already larger)
+      const minScaleForRes = 2048 / Math.max(image.naturalWidth, image.naturalHeight);
+      const targetSuperSample = Math.max(1, Math.min(3.0, Math.max(minScaleForFace, minScaleForRes)));
+      const maxAllowedDim = 3840;
+      const finalScale = Math.min(targetSuperSample, maxAllowedDim / Math.max(image.naturalWidth, image.naturalHeight));
+
+      const width = Math.round(image.naturalWidth * finalScale);
+      const height = Math.round(image.naturalHeight * finalScale);
+
+      // Draw high-resolution base plate with high-quality bicubic smoothing
+      const input = document.createElement('canvas');
+      input.width = width;
+      input.height = height;
+      const ctx = input.getContext('2d', { willReadFrequently: true });
+      if (!ctx) throw Error('Photo processing unavailable.');
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(image, 0, 0, width, height);
+
+      // 3. Compute 3D eyewear pose on high-resolution canvas
       const pose = eyewearPose(points, width, height);
       if (!pose) throw Error('Could not measure this face.');
 
@@ -238,23 +318,55 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
       if (runId !== activeRun.current) return;
 
       rig = new EyewearRig(model, product.id);
-      renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true, preserveDrawingBuffer: true });
+
+      // 4. Initialize WebGL Renderer with High-Performance Settings & Hardware MSAA
+      renderer = new THREE.WebGLRenderer({
+        antialias: true,
+        preserveDrawingBuffer: true,
+        alpha: false, // Unified scene rendering: photo is in background, so MSAA blends directly against skin pixels!
+        powerPreference: 'high-performance',
+      });
       renderer.setSize(width, height);
       renderer.setPixelRatio(1);
       renderer.outputColorSpace = THREE.SRGBColorSpace;
       renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.05;
 
       const scene = new THREE.Scene();
+
+      // 5. High-Resolution Background Photo Quad (depthTest: false, toneMapped: false to preserve 100% true skin colors)
+      bgTexture = new THREE.CanvasTexture(input);
+      bgTexture.colorSpace = THREE.SRGBColorSpace;
+      bgTexture.minFilter = THREE.LinearFilter;
+      bgTexture.magFilter = THREE.LinearFilter;
+
+      const bgMat = new THREE.MeshBasicMaterial({
+        map: bgTexture,
+        depthTest: false,
+        depthWrite: false,
+        toneMapped: false,
+      });
+      const bgMesh = new THREE.Mesh(new THREE.PlaneGeometry(width, height), bgMat);
+      bgMesh.position.set(0, 0, -1800);
+      bgMesh.renderOrder = -100;
+      scene.add(bgMesh);
+
+      // 6. Balanced Natural Studio Lighting
       env = generateStudioEnvironment(renderer, 'studio');
       scene.environment = env.texture;
-      scene.add(new THREE.HemisphereLight(0xffffff, 0x716a60, 1.2));
-      const light = new THREE.DirectionalLight(0xffffff, 1.5);
-      light.position.set(-100, 200, 600);
-      scene.add(light);
+      scene.add(new THREE.HemisphereLight(0xfff8f0, 0x4a4036, 1.25));
+      const keyLight = new THREE.DirectionalLight(0xffffff, 1.35);
+      keyLight.position.set(-width * 0.25, height * 0.35, 900);
+      scene.add(keyLight);
+      const fillLight = new THREE.DirectionalLight(0xe2e8f0, 0.75);
+      fillLight.position.set(width * 0.3, -height * 0.1, 700);
+      scene.add(fillLight);
 
-      const camera = new THREE.OrthographicCamera(-width / 2, width / 2, height / 2, -height / 2, 0.1, 4000);
+      // 7. Orthographic Camera exactly framing the canvas
+      const camera = new THREE.OrthographicCamera(-width / 2, width / 2, height / 2, -height / 2, 0.1, 4500);
       camera.position.z = 1000;
 
+      // 8. Eyewear Group & Temple Arm Fitting
       const root = new THREE.Group();
       root.add(rig.group);
       root.position.copy(pose.position);
@@ -262,8 +374,25 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
       root.scale.setScalar(rig.fittedScale(pose.eyeSpan, pose.faceWidth, pose.isFrontal));
       scene.add(root);
       root.updateMatrixWorld(true);
-      rig.fitTemples(root.worldToLocal(pose.leftTemple.clone()), root.worldToLocal(pose.rightTemple.clone()));
 
+      const localLeftTemple = root.worldToLocal(pose.leftTemple.clone());
+      const localRightTemple = root.worldToLocal(pose.rightTemple.clone());
+      rig.fitTemples(localLeftTemple, localRightTemple);
+
+      // 9. Depth Occluders (Skull Volume + Face Surface Mask)
+      const depthMaterial = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: true, side: THREE.DoubleSide });
+      material = depthMaterial;
+
+      // Cranium / Skull occluder cleanly hides far temple arm behind head/hair during angled poses
+      const faceWidth = localLeftTemple.distanceTo(localRightTemple);
+      skullGeometry = new THREE.SphereGeometry(1, 32, 24);
+      const skull = new THREE.Mesh(skullGeometry, depthMaterial);
+      skull.position.set((localLeftTemple.x + localRightTemple.x) / 2, 0.6, (localLeftTemple.z + localRightTemple.z) / 2 - faceWidth * 0.13);
+      skull.scale.set(faceWidth * 0.49, faceWidth * 0.70, faceWidth * 0.46);
+      skull.renderOrder = -10;
+      root.add(skull);
+
+      // Face mesh occluder
       const response = await fetch('/tracking/face-triangles.json');
       if (!response.ok) throw Error('Face surface could not load.');
       const triangles = await response.json();
@@ -282,17 +411,74 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
           3
         )
       );
-
-      material = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: true, side: THREE.DoubleSide });
-      const mask = new THREE.Mesh(geometry, material);
+      const mask = new THREE.Mesh(geometry, depthMaterial);
       mask.renderOrder = -10;
       scene.add(mask);
 
+      // 10. Soft Ambient Contact Shadow on Nose Bridge & Radix
+      shadowTexture = createContactShadowTexture();
+      const shadowGeo = new THREE.PlaneGeometry(pose.eyeSpan * 0.50, pose.eyeSpan * 0.28);
+      const shadowMat = new THREE.MeshBasicMaterial({
+        map: shadowTexture,
+        transparent: true,
+        opacity: 0.32,
+        depthWrite: false,
+      });
+      const shadowMesh = new THREE.Mesh(shadowGeo, shadowMat);
+      shadowMesh.position.copy(pose.bridge);
+      shadowMesh.position.addScaledVector(pose.yAxis, -pose.eyeSpan * 0.04);
+      shadowMesh.position.addScaledVector(pose.zAxis, -pose.eyeSpan * 0.02);
+      shadowMesh.quaternion.copy(pose.quaternion);
+      shadowMesh.renderOrder = -5;
+      scene.add(shadowMesh);
+
+      // 11. Render Full High-Definition Scene
       renderer.render(scene, camera);
-      ctx.drawImage(renderer.domElement, 0, 0);
+
+      // 12. Create Crisp Composited Result with Smart Clarity
+      const finalCanvas = document.createElement('canvas');
+      finalCanvas.width = width;
+      finalCanvas.height = height;
+      const fCtx = finalCanvas.getContext('2d', { willReadFrequently: true })!;
+      fCtx.drawImage(renderer.domElement, 0, 0);
+      applyPhotographicClarity(fCtx, width, height, 0.22);
+      const fullResultUrl = finalCanvas.toDataURL('image/png');
+
+      // 13. Create High-Definition Face-Focus Portrait Crop
+      const faceCenterX = ((minX + maxX) / 2) * width;
+      const faceCenterY = ((minY + maxY) / 2) * height;
+      const facePixWidth = (maxX - minX) * width;
+      const facePixHeight = (maxY - minY) * height;
+
+      const cropSide = Math.round(Math.max(facePixWidth * 2.15, facePixHeight * 1.85));
+      const cropX = Math.round(Math.max(0, Math.min(width - cropSide, faceCenterX - cropSide / 2)));
+      const cropY = Math.round(Math.max(0, Math.min(height - cropSide, faceCenterY - cropSide * 0.40)));
+      const actualCropWidth = Math.min(cropSide, width - cropX);
+      const actualCropHeight = Math.min(cropSide, height - cropY);
+
+      const cropTargetRes = Math.min(1440, Math.round(Math.max(actualCropWidth, actualCropHeight)));
+      const cropCanvas = document.createElement('canvas');
+      cropCanvas.width = cropTargetRes;
+      cropCanvas.height = cropTargetRes;
+      const cropCtx = cropCanvas.getContext('2d')!;
+      cropCtx.imageSmoothingEnabled = true;
+      cropCtx.imageSmoothingQuality = 'high';
+      cropCtx.drawImage(finalCanvas, cropX, cropY, actualCropWidth, actualCropHeight, 0, 0, cropTargetRes, cropTargetRes);
+      const faceResultUrl = cropCanvas.toDataURL('image/png');
+
+      const origCropCanvas = document.createElement('canvas');
+      origCropCanvas.width = cropTargetRes;
+      origCropCanvas.height = cropTargetRes;
+      const origCropCtx = origCropCanvas.getContext('2d')!;
+      origCropCtx.imageSmoothingEnabled = true;
+      origCropCtx.imageSmoothingQuality = 'high';
+      origCropCtx.drawImage(input, cropX, cropY, actualCropWidth, actualCropHeight, 0, 0, cropTargetRes, cropTargetRes);
+      const faceOrigUrl = origCropCanvas.toDataURL('image/png');
 
       if (runId === activeRun.current) {
-        setResult(input.toDataURL('image/png'));
+        setResult(fullResultUrl);
+        setFaceCropResult(faceResultUrl);
+        setFaceCropOriginal(faceOrigUrl);
       }
     } catch (e) {
       if (runId === activeRun.current) {
@@ -304,6 +490,9 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
       env?.dispose();
       geometry?.dispose();
       material?.dispose();
+      skullGeometry?.dispose();
+      bgTexture?.dispose();
+      shadowTexture?.dispose();
       renderer?.dispose();
       if (runId === activeRun.current) {
         setBusy(false);
@@ -429,6 +618,9 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
                         activeRun.current++;
                         setPhoto(null);
                         setResult(null);
+                        setFaceCropResult(null);
+                        setFaceCropOriginal(null);
+                        setViewMode('full');
                         setFaceStatus('idle');
                         setError('');
                         setBusy(false);
@@ -660,6 +852,8 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
                       setVariant(0);
                       onSelect(p);
                       setResult(null); // Reset result so user clicks "Try on" to generate with new frame
+                      setFaceCropResult(null);
+                      setFaceCropOriginal(null);
                     }
                   }}
                 >
@@ -680,6 +874,8 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
                     request.current++;
                     setVariant(Number(e.target.value));
                     setResult(null); // Reset result so user clicks "Try on" to generate with new finish
+                    setFaceCropResult(null);
+                    setFaceCropOriginal(null);
                   }}
                 >
                   {product.variants.map((v, i) => (
@@ -732,22 +928,22 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
           <div className={`photo-result-stage ${zoom > 1 ? 'photo-result-zoomed' : ''}`}>
             <div className="photo-zoom-content" style={{ width: `${zoom * 100}%`, height: `${zoom * 100}%`, position: 'relative' }}>
               <div className="photo-result-labels">
-                <span>ORIGINAL</span>
-                <span>{result ? 'FITTED RESULT' : 'PREVIEW'}</span>
+                <span>ORIGINAL {viewMode === 'face' && faceCropOriginal ? '(FACE)' : ''}</span>
+                <span>{result ? (viewMode === 'face' && faceCropResult ? 'FITTED FACE (HD)' : 'FITTED RESULT (HD)') : 'PREVIEW'}</span>
               </div>
 
               {photo ? (
                 <>
                   <img
                     className="photo-result-image"
-                    src={result || photo}
+                    src={(viewMode === 'face' && faceCropResult ? faceCropResult : result) || photo}
                     alt={result ? `${product.name} fitted on your face` : 'Photo preview'}
                   />
                   {result && (
                     <>
                       <img
                         className="photo-result-original"
-                        src={photo}
+                        src={(viewMode === 'face' && faceCropOriginal ? faceCropOriginal : photo)!}
                         alt="Original for comparison"
                         style={{ clipPath: `inset(0 ${100 - split}% 0 0)` }}
                       />
@@ -789,33 +985,80 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
             {(busy || aiBusy) && (
               <div className="photo-rendering" role="status">
                 <span />
-                {aiBusy ? 'AI enhancement in progress…' : 'Analyzing face & fitting your frames…'}
+                {aiBusy ? 'AI enhancement in progress…' : 'Rendering Ultra-HD 3D CAD frames on face…'}
               </div>
             )}
           </div>
 
-          <div className="photo-result-tools">
-            <button onClick={() => setZoom((z) => Math.max(1, z - 0.5))} aria-label="Zoom out">
-              −
-            </button>
-            <span>{Math.round(zoom * 100)}%</span>
-            <button onClick={() => setZoom((z) => Math.min(4, z + 0.5))} aria-label="Zoom in">
-              +
-            </button>
-            <button onClick={() => setZoom(1)}>Fit</button>
-            <button disabled={!result || busy || aiBusy} onClick={enhance}>
-              AI enhance
-            </button>
+          <div className="photo-result-tools flex flex-wrap items-center justify-between gap-2.5">
+            {/* View Mode Switch (Full View vs Face Focus) */}
+            {faceCropResult ? (
+              <div className="flex items-center bg-[#1e152d] p-0.5 rounded-lg border border-purple-900/60">
+                <button
+                  type="button"
+                  className={`px-3 py-1 text-xs font-semibold rounded-md transition flex items-center gap-1.5 cursor-pointer ${viewMode === 'full' ? 'bg-[#7c3aed] text-white shadow-sm' : 'text-[#c084fc] hover:text-white'}`}
+                  onClick={() => setViewMode('full')}
+                >
+                  <Maximize2 size={12} />
+                  <span>Full View</span>
+                </button>
+                <button
+                  type="button"
+                  className={`px-3 py-1 text-xs font-semibold rounded-md transition flex items-center gap-1.5 cursor-pointer ${viewMode === 'face' ? 'bg-[#7c3aed] text-white shadow-sm' : 'text-[#c084fc] hover:text-white'}`}
+                  onClick={() => setViewMode('face')}
+                >
+                  <ScanFace size={13} />
+                  <span>Face Focus (HD)</span>
+                </button>
+              </div>
+            ) : <div />}
+
+            {/* Zoom Controls */}
+            <div className="flex items-center gap-1.5">
+              <button onClick={() => setZoom((z) => Math.max(1, z - 0.5))} aria-label="Zoom out">
+                −
+              </button>
+              <span className="text-xs px-1 text-purple-300 font-semibold">{Math.round(zoom * 100)}%</span>
+              <button onClick={() => setZoom((z) => Math.min(4, z + 0.5))} aria-label="Zoom in">
+                +
+              </button>
+              <button onClick={() => setZoom(1)}>Fit</button>
+            </div>
+
+            {/* AI / Extra Action button */}
+            <div className="ml-auto">
+              <button disabled={!result || busy || aiBusy} onClick={enhance} className="flex items-center gap-1.5">
+                <Sparkles size={13} />
+                <span>AI enhance</span>
+              </button>
+            </div>
           </div>
 
           <footer>
             <span className={result && !busy ? 'photo-result-ready' : ''}>
-              ● {busy ? 'PROCESSING' : result ? 'RENDER READY · PNG' : photo ? 'READY TO TRY ON' : 'WAITING FOR PHOTO'}
+              ● {busy ? 'PROCESSING ULTRA-HD' : result ? 'RENDER READY · ULTRA HD PNG' : photo ? 'READY TO TRY ON' : 'WAITING FOR PHOTO'}
             </span>
             {result && !busy && (
-              <a className="photo-download" href={result} download={`lumen-${product.id}.png`}>
-                <Download size={15} /> Download
-              </a>
+              <div className="flex items-center gap-2">
+                {faceCropResult && (
+                  <a
+                    className="photo-download secondary px-3 py-1.5 rounded-lg bg-violet-950/60 border border-violet-500/30 hover:border-violet-400 text-violet-200 text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
+                    href={faceCropResult}
+                    download={`face-portrait-${product.id}.png`}
+                    title="Download high-resolution face close-up"
+                  >
+                    <Download size={13} /> Face (HD)
+                  </a>
+                )}
+                <a
+                  className="photo-download px-3.5 py-1.5 rounded-lg bg-gradient-to-r from-violet-600 to-purple-600 text-white text-xs font-bold flex items-center gap-1.5 shadow-md shadow-violet-500/25 transition hover:brightness-110 cursor-pointer"
+                  href={result}
+                  download={`lumen-${product.id}.png`}
+                  title="Download complete high-resolution try-on photo"
+                >
+                  <Download size={13} /> Full Photo (HD)
+                </a>
+              </div>
             )}
           </footer>
         </section>

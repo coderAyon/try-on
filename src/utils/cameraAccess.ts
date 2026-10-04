@@ -13,7 +13,8 @@ export async function openTryOnCamera(cancelled: () => boolean): Promise<MediaSt
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: attempt === 0 ? { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } } : true,
+          video: attempt === 0 ? { facingMode: 'user', width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 60, max: 60 } }
+            : { facingMode: 'user', frameRate: { ideal: 60, max: 60 } },
           audio: false,
         });
         if (cancelled()) { stream.getTracks().forEach(track => track.stop()); await pause(); return null; }

@@ -32,12 +32,17 @@ export function eyewearPose(landmarks: Landmark[], width: number, height: number
 
   const euler = new THREE.Euler().setFromQuaternion(quaternion, 'YXZ');
   const isFrontal = Math.abs(euler.y) < 0.26 && Math.abs(euler.x) < 0.26;
+  const headAxis = world(356).sub(world(127)).normalize();
 
   return {
     position,
     bridge,
     quaternion,
     eyeSpan,
+    // Temple landmarks are outside the eyelids and do not contract on a blink.
+    scaleSpan: world(127).distanceTo(world(356)),
+    scaleFaceWidth: Math.abs(world(234).sub(world(454)).dot(headAxis)),
+    scaleAxis: headAxis,
     leftTemple: world(127),
     rightTemple: world(356),
     zAxis,
@@ -55,6 +60,10 @@ export class StableEyewearPose {
   private localAnchor: THREE.Vector3 | null = null;
   private previousSpan = 0;
   private span = 0;
+  private headToEyeRatio = 1;
+  private headToFaceRatio = 1;
+  private previousScaleAxis: THREE.Vector3 | null = null;
+  private scaleAngularSpeed = 0;
   private frontalSpan: number | null = null;
   private velocity = new THREE.Vector3();
   private angularDirection = new THREE.Vector3();
@@ -77,20 +86,32 @@ export class StableEyewearPose {
     this.bridgeVelocity.set(0, 0, 0);
     this.spanVelocity = 0;
     this.frontalSpan = null;
+    this.headToEyeRatio = 1;
+    this.headToFaceRatio = 1;
+    this.previousScaleAxis = null;
+    this.scaleAngularSpeed = 0;
   }
 
   update(pose: EyewearPose, now: number): EyewearPose {
     const dt = THREE.MathUtils.clamp((now - this.time) / 1000, 1 / 120, 0.1);
     const alpha = (cutoff: number) => 1 - Math.exp(-2 * Math.PI * cutoff * dt);
-    const offset = pose.position.clone().sub(pose.bridge).applyQuaternion(pose.quaternion.clone().invert()).divideScalar(pose.eyeSpan);
+    const headSpan = pose.scaleSpan && pose.scaleSpan > 8 ? pose.scaleSpan : null;
+    const reacquiring = !this.rotation || !this.localAnchor || now - this.time > 250;
+    if (reacquiring) this.headToEyeRatio = headSpan ? pose.eyeSpan / headSpan : 1;
+    if (reacquiring) this.headToFaceRatio = pose.scaleFaceWidth && pose.scaleFaceWidth > 8
+      ? pose.faceWidth / pose.scaleFaceWidth : 1;
+    const measuredSpan = headSpan ? headSpan * this.headToEyeRatio : pose.eyeSpan;
+    const measuredFaceWidth = pose.scaleFaceWidth && pose.scaleFaceWidth > 8
+      ? pose.scaleFaceWidth * this.headToFaceRatio : pose.faceWidth;
+    const offset = pose.position.clone().sub(pose.bridge).applyQuaternion(pose.quaternion.clone().invert()).divideScalar(measuredSpan);
 
     if (!this.rotation || !this.localAnchor || now - this.time > 250) {
       this.rotation = pose.quaternion.clone();
       this.localAnchor = offset.clone();
-      this.span = pose.eyeSpan;
+      this.span = measuredSpan;
       this.frontalSpan = pose.eyeSpan;
       this.previousRotation = pose.quaternion.clone();
-      this.previousSpan = pose.eyeSpan;
+      this.previousSpan = measuredSpan;
       this.bridge = pose.bridge.clone();
       this.previousBridge.copy(pose.bridge);
       this.velocity.set(0, 0, 0);
@@ -98,6 +119,8 @@ export class StableEyewearPose {
       this.coherentAngularSamples = 0;
       this.bridgeVelocity.set(0, 0, 0);
       this.spanVelocity = 0;
+      this.previousScaleAxis = pose.scaleAxis?.clone() ?? null;
+      this.scaleAngularSpeed = 0;
     } else {
       // 1. Intelligent Angular Velocity & Rotation Responsiveness
       const delta = pose.quaternion.clone().multiply(this.previousRotation!.clone().invert());
@@ -121,26 +144,32 @@ export class StableEyewearPose {
 
       // 2. Continuous Adaptive One-Euro Scale Filter (Butter-smooth zoom in/out + rock-solid stationary lock)
       // Low-pass filtered derivative (cutoff 0.85 Hz) prevents detector frame-to-frame noise from spiking velocity
-      const spanDerivative = (pose.eyeSpan - this.previousSpan) / (dt * Math.max(8, this.span));
+      const spanDerivative = (measuredSpan - this.previousSpan) / (dt * Math.max(8, this.span));
       this.spanVelocity += (spanDerivative - this.spanVelocity) * alpha(0.85);
 
       // Deadband filters out stationary sensor tremor so filter stays locked at fmin when sitting still
       const zoomSpeed = Math.max(0, Math.abs(this.spanVelocity) - 0.05);
 
       // Rotational damping: suppress spurious scale expansion during rapid head turns
-      const rotDamping = 1.0 / (1.0 + Math.max(0, rotSpeed - 0.03) * 10.0);
+      // Scale damping must also ignore eyelid-induced eye-axis rotation.
+      if (pose.scaleAxis && this.previousScaleAxis) {
+        const headSpeed = pose.scaleAxis.angleTo(this.previousScaleAxis) / dt;
+        this.scaleAngularSpeed += (headSpeed - this.scaleAngularSpeed) * alpha(3);
+      }
+      const scaleRotSpeed = pose.scaleAxis ? this.scaleAngularSpeed : rotSpeed;
+      const rotDamping = 1.0 / (1.0 + Math.max(0, scaleRotSpeed - 0.03) * 10.0);
 
       // Adaptive cutoff frequency:
       // - Stationary lock (zoomSpeed === 0): cutoff = 0.38 Hz guarantees rock-solid, zero-tremor stability ("kapakapi kora jabe na")
       // - Active zoom (zoomSpeed > 0): smoothly scales cutoff up to 4.5+ Hz for fluid, lag-free zoom in/out
       const spanCutoff = 0.38 + zoomSpeed * 28.0 * rotDamping;
-      this.span += (pose.eyeSpan - this.span) * alpha(spanCutoff);
+      this.span += (measuredSpan - this.span) * alpha(spanCutoff);
 
       // 3. Fast Nose Bridge Position Responsiveness
-      const bridgeDerivative = pose.bridge.clone().sub(this.previousBridge).divideScalar(dt * pose.eyeSpan);
+      const bridgeDerivative = pose.bridge.clone().sub(this.previousBridge).divideScalar(dt * measuredSpan);
       this.bridgeVelocity.lerp(bridgeDerivative, alpha(3));
       const speed = this.bridgeVelocity.length();
-      const displacement = this.bridge!.distanceTo(pose.bridge) / Math.max(8, pose.eyeSpan);
+      const displacement = this.bridge!.distanceTo(pose.bridge) / Math.max(8, measuredSpan);
       const posCutoff = displacement < .015 ? 1.4
         : 1.4 + Math.max(0, speed - 0.02) * 22 + Math.max(0, displacement - 0.01) * 120;
       this.bridge!.lerp(pose.bridge, alpha(posCutoff));
@@ -149,7 +178,8 @@ export class StableEyewearPose {
     this.previousBridge.copy(pose.bridge);
     this.time = now;
     this.previousRotation = pose.quaternion.clone();
-    this.previousSpan = pose.eyeSpan;
+    this.previousSpan = measuredSpan;
+    this.previousScaleAxis = pose.scaleAxis?.clone() ?? null;
 
     const quaternion = this.rotation.clone();
     const eyeSpan = this.span;
@@ -161,7 +191,7 @@ export class StableEyewearPose {
       position,
       quaternion,
       eyeSpan,
-      faceWidth: (pose.faceWidth / pose.eyeSpan) * eyeSpan,
+      faceWidth: (measuredFaceWidth / measuredSpan) * eyeSpan,
       yAxis: new THREE.Vector3(0, 1, 0).applyQuaternion(quaternion),
       zAxis: new THREE.Vector3(0, 0, 1).applyQuaternion(quaternion),
     };
@@ -358,8 +388,16 @@ export class EyewearRig {
         const tail = this.tails[x < 0 ? 0 : 1];
         const t = THREE.MathUtils.clamp((hingeDepth - z) / Math.max(.5, hingeDepth - tail.z), 0, 1.5);
         const targetZ = Math.min(hingeDepth - 0.2, ear.z - 0.35);
+        let fittedX = x + (ear.x - tail.x) * t;
+        if (this.productId === 'imported-vuzix') {
+          // The electronics housing is wider than a normal temple. Keep its
+          // AR copy inside the hinge-to-temple contour instead of jutting out.
+          const progress = THREE.MathUtils.clamp(t, 0, 1);
+          const contour = THREE.MathUtils.lerp(this.frontWidth / 2, Math.abs(ear.x), progress) + .06;
+          fittedX = Math.sign(x) * Math.min(Math.abs(fittedX), contour);
+        }
         positions.setXYZ(i,
-          x + (ear.x - tail.x) * t,
+          fittedX,
           y + (ear.y - tail.y) * t,
           hingeDepth + (targetZ - hingeDepth) * t,
         );
