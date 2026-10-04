@@ -2502,6 +2502,61 @@
   ],
   "telemetryLogs": [
     {
+      "fps": 47,
+      "ipdMm": 63,
+      "faceWidthMm": 108,
+      "headYaw": 5,
+      "headPitch": 6,
+      "headRoll": 0,
+      "trackingConfidence": 98,
+      "id": "tel-1791111851672",
+      "timestamp": "2026-10-04T11:04:11.672Z"
+    },
+    {
+      "fps": 46,
+      "ipdMm": 63,
+      "faceWidthMm": 112,
+      "headYaw": -7,
+      "headPitch": 18,
+      "headRoll": -1,
+      "trackingConfidence": 98,
+      "id": "tel-1791111699137",
+      "timestamp": "2026-10-04T11:01:39.137Z"
+    },
+    {
+      "fps": 60,
+      "ipdMm": 63,
+      "faceWidthMm": 109,
+      "headYaw": 5,
+      "headPitch": -6,
+      "headRoll": 5,
+      "trackingConfidence": 98,
+      "id": "tel-1791111691696",
+      "timestamp": "2026-10-04T11:01:31.696Z"
+    },
+    {
+      "fps": 51,
+      "ipdMm": 63,
+      "faceWidthMm": 109,
+      "headYaw": -8,
+      "headPitch": 11,
+      "headRoll": 2,
+      "trackingConfidence": 98,
+      "id": "tel-1791111340009",
+      "timestamp": "2026-10-04T10:55:40.009Z"
+    },
+    {
+      "fps": 60,
+      "ipdMm": 63,
+      "faceWidthMm": 107,
+      "headYaw": -1,
+      "headPitch": 22,
+      "headRoll": 10,
+      "trackingConfidence": 98,
+      "id": "tel-1791111334994",
+      "timestamp": "2026-10-04T10:55:34.994Z"
+    },
+    {
       "fps": 52,
       "ipdMm": 63,
       "faceWidthMm": 109,
@@ -3545,61 +3600,6 @@
       "trackingConfidence": 98,
       "id": "tel-1791110132699",
       "timestamp": "2026-10-04T10:35:32.699Z"
-    },
-    {
-      "fps": 46,
-      "ipdMm": 63,
-      "faceWidthMm": 117,
-      "headYaw": 0,
-      "headPitch": 21,
-      "headRoll": 2,
-      "trackingConfidence": 98,
-      "id": "tel-1791110127584",
-      "timestamp": "2026-10-04T10:35:27.584Z"
-    },
-    {
-      "fps": 45,
-      "ipdMm": 63,
-      "faceWidthMm": 117,
-      "headYaw": -1,
-      "headPitch": 20,
-      "headRoll": 3,
-      "trackingConfidence": 98,
-      "id": "tel-1791110122460",
-      "timestamp": "2026-10-04T10:35:22.460Z"
-    },
-    {
-      "fps": 46,
-      "ipdMm": 63,
-      "faceWidthMm": 112,
-      "headYaw": -1,
-      "headPitch": 12,
-      "headRoll": 0,
-      "trackingConfidence": 98,
-      "id": "tel-1791110117396",
-      "timestamp": "2026-10-04T10:35:17.396Z"
-    },
-    {
-      "fps": 43,
-      "ipdMm": 63,
-      "faceWidthMm": 113,
-      "headYaw": -6,
-      "headPitch": 19,
-      "headRoll": 3,
-      "trackingConfidence": 98,
-      "id": "tel-1791110112289",
-      "timestamp": "2026-10-04T10:35:12.289Z"
-    },
-    {
-      "fps": 34,
-      "ipdMm": 63,
-      "faceWidthMm": 108,
-      "headYaw": -8,
-      "headPitch": 21,
-      "headRoll": -4,
-      "trackingConfidence": 98,
-      "id": "tel-1791110107282",
-      "timestamp": "2026-10-04T10:35:07.282Z"
     }
   ],
   "orders": [
