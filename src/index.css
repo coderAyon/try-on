@@ -765,6 +765,17 @@ body {
   font-weight: 600;
 }
 
+.fit-live-preview {
+  display: block;
+  width: min(100%, 320px);
+  height: 200px;
+  flex-shrink: 0;
+  object-fit: contain;
+  background: #170e28;
+  border: 1px solid #c084fc;
+  border-radius: 16px;
+}
+
 .fit-scan p {
   font-size: 13px;
   max-width: 390px;

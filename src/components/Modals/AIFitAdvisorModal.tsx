@@ -49,7 +49,7 @@ export const AIFitAdvisorModal: React.FC<Props> = ({ isOpen, onClose, onSelectPr
     const draw = () => {
       const source = document.getElementById('landmarkCameraCanvas') as HTMLCanvasElement | null;
       const glasses = document.getElementById('landmarkGlassesCanvas') as HTMLCanvasElement | null;
-      if (source && glasses) for (const [target, overlay] of [[before.current, false], [after.current, true]] as const) {
+      if (source && source.width > 0 && source.height > 0) for (const [target, overlay] of [[before.current, false], [after.current, true]] as const) {
         if (!target) continue;
         if (target.width !== source.width || target.height !== source.height) { target.width = source.width; target.height = source.height; }
         const ctx = target.getContext('2d');
@@ -57,7 +57,7 @@ export const AIFitAdvisorModal: React.FC<Props> = ({ isOpen, onClose, onSelectPr
         ctx.save(); ctx.clearRect(0, 0, target.width, target.height);
         if (mirror) { ctx.translate(target.width, 0); ctx.scale(-1, 1); }
         ctx.drawImage(source, 0, 0);
-        if (overlay) ctx.drawImage(glasses, 0, 0, target.width, target.height);
+        if (overlay && glasses && glasses.width > 0 && glasses.height > 0) ctx.drawImage(glasses, 0, 0, target.width, target.height);
         ctx.restore();
       }
       frame = requestAnimationFrame(draw);
@@ -83,9 +83,10 @@ export const AIFitAdvisorModal: React.FC<Props> = ({ isOpen, onClose, onSelectPr
             <span className="detail-label">ESTIMATED FACE SHAPE</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '4px' }}>
               <h3 style={{ margin: 0 }}>{result.shape}</h3>
-              <span className="fit-confidence-badge">{result.confidence}% Match</span>
+              <span className="fit-confidence-badge">{result.confidence}% shape similarity</span>
             </div>
             <p style={{ marginTop: '8px' }}>{result.reason}</p>
+            <p><strong>Recommended frame shape: {result.recommendedShape ?? 'No suitable models available'}</strong>. {['Square', 'Round', 'Oval'].includes(result.shape) ? 'Showing only frames with the same shape as your face.' : 'Showing the closest available frame silhouette for your face shape.'}</p>
             {result.scores && (
               <div className="fit-scores-breakdown">
                 <span className="fit-scores-title">MORPHOLOGY MATCH PROFILES</span>
@@ -114,9 +115,9 @@ export const AIFitAdvisorModal: React.FC<Props> = ({ isOpen, onClose, onSelectPr
           <span>Forehead / cheek <strong>{measurement!.foreheadToCheek.toFixed(2)}x</strong></span>
           <span>Forehead / jaw ratio <strong>{(measurement!.foreheadToJaw ?? (measurement!.foreheadToCheek / (measurement!.jawToCheek || 1))).toFixed(2)}x</strong></span>
         </div>
-        <h3 className="fit-section-title">Suggested frame shapes</h3>
+        <h3 className="fit-section-title">Recommended frame shape</h3>
         <div className="fit-shapes">{result.shapes.map(shape => <div key={shape}><ShapePreview shape={shape} /><span>{shape === 'Flat' ? 'Soft flat / browline' : shape}</span></div>)}</div>
-        <h3 className="fit-section-title">Try these on your face</h3>
+        <h3 className="fit-section-title">{result.recommendedShape ? `All ${result.recommendedShape.toLowerCase()} frames for you · ${result.frames.length} models` : 'No matching frames in this catalog yet'}</h3>
         <div className="fit-products">{result.frames.map(({ product, shape }) => <button key={product.id} data-fit-product={product.id} aria-pressed={activeProduct.id === product.id} onClick={() => onSelectProduct(product)}><ProductThumbnail product={product} /><span className="detail-label">{shape} frame</span><h4>{product.brand} · {product.name}</h4><p>{result.shape} styling match: {result.reason}</p><p>{product.frameMaterial} · {product.polarized ? 'Polarized' : 'Non-polarized'} · {product.uvProtection}</p><p>Lens {product.dimensions.lensWidth} mm · Bridge {product.dimensions.bridgeWidth} mm · Temple {product.dimensions.templeLength} mm</p><span className="fit-try">{activeProduct.id === product.id ? 'Comparing now' : 'Compare on my face'} <ArrowRight size={13} /></span></button>)}</div>
       </div>}
       <footer>Measured on your device using MediaPipe face landmarks. Shape suggestions are styling estimates; no face photo is uploaded for this analysis.</footer>

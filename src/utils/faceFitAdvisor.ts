@@ -66,7 +66,7 @@ export class FaceMeasurementSampler {
 export type FrameShape = 'Round' | 'Oval' | 'Square' | 'Flat' | 'Geometric' | 'Aviator';
 const groups: Record<FrameShape, string[]> = {
   Round: ['rayban-round-metal', 'imported-obj-classic', 'imported-green-round', 'imported-pack-pink', 'imported-pack-green'],
-  Oval: ['matsuda-m2026', 'imported-lis', 'imported-pack-white', 'imported-sunglass-2', 'imported-stylized-full'],
+  Oval: ['versace-ve4514d', 'matsuda-m2026', 'imported-lis', 'imported-pack-white', 'imported-sunglass-2', 'imported-stylized-full'],
   Square: ['rayban-wayfarer-classic', 'prada-symbole', 'rayban-meta', 'imported-fano', 'imported-rayban-junior', 'imported-meta-quest', 'imported-meta-red', 'imported-mustang', 'imported-sunglass-3', 'imported-sunglass-original', 'imported-vuzix', 'imported-pack-blue', 'imported-pack-black'],
   Flat: ['oakley-radar-ev-path', 'imported-pixel', 'imported-stylized-brow', 'imported-sunglass-1', 'imported-sunglass-4', 'imported-fly'],
   Geometric: ['rayban-hexagonal-flat'], Aviator: ['rayban-aviator-classic', 'imported-pack-aviator'],
@@ -154,28 +154,28 @@ export function getPersonalizedAdvice(shape: FaceShape, m: FaceMeasurements): { 
   switch (shape) {
     case 'Oval':
       return {
-        shapes: ['Square', 'Oval', 'Flat', 'Round'],
-        reason: `Your face length (${hW}x width) is gracefully elongated with a balanced jaw-to-cheek taper (${jC}x). Square, browline, and classic oval frames harmonize seamlessly.`,
+        shapes: ['Oval'],
+        reason: `Your face length (${hW}x width) and jaw-to-cheek taper (${jC}x) suggest an oval face. Showing oval frames to follow this shape.`,
       };
     case 'Round':
       return {
-        shapes: ['Square', 'Flat', 'Geometric'],
-        reason: `Your facial length and cheek width are balanced (${hW}x) with softer cheekbone contours and rounded jaw (${jC}x). Angular, square, and geometric frames add instant architectural definition.`,
+        shapes: ['Round'],
+        reason: `Your facial length and cheek width are balanced (${hW}x), with a rounded jaw (${jC}x). Showing round frames to follow this shape.`,
       };
     case 'Square':
       return {
-        shapes: ['Round', 'Oval', 'Aviator'],
-        reason: `Your jawline (${jC}x) and forehead (${fC}x) share strong, well-defined horizontal symmetry. Curved round, oval, and aviator lenses gracefully soften and complement the striking angles.`,
+        shapes: ['Square'],
+        reason: `Your jawline (${jC}x) and forehead (${fC}x) suggest a square face. Showing square frames to follow this shape.`,
       };
     case 'Heart':
       return {
         shapes: ['Oval', 'Aviator', 'Round'],
-        reason: `Your forehead is broader (${fC}x) with a delicate taper down toward a slender chin and jaw (${jC}x). Rounded, lower-weighted silhouettes like aviators bring perfect optical equilibrium.`,
+        reason: `Your forehead is broader (${fC}x) with a delicate taper down toward a slender chin and jaw (${jC}x). A softer silhouette can balance the broader upper face.`,
       };
     case 'Diamond':
       return {
         shapes: ['Oval', 'Round', 'Flat'],
-        reason: `Your sculpted cheekbones are the dramatic focal point, tapering toward both forehead (${fC}x) and jaw (${jC}x). Oval lenses and soft browline frames effortlessly accentuate your eyes.`,
+        reason: `Your sculpted cheekbones are the dramatic focal point, tapering toward both forehead (${fC}x) and jaw (${jC}x). Soft curves can balance the prominent cheekbones.`,
       };
   }
 }
@@ -184,12 +184,14 @@ export function suggestFrames(measurements: FaceMeasurements, products: Sunglass
   const shape = classifyFace(measurements);
   const adviceData = getPersonalizedAdvice(shape, measurements);
   const ranked = products.map((product, order) => ({ product, shape: frameShape(product), order })).filter(item => adviceData.shapes.includes(item.shape)).sort((a, b) => adviceData.shapes.indexOf(a.shape) - adviceData.shapes.indexOf(b.shape) || a.order - b.order);
-  // Include different silhouettes before filling the remaining preview slots.
-  const diverse = adviceData.shapes.map(s => ranked.find(p => p.shape === s)).filter((p): p is typeof ranked[number] => !!p);
-  const frames = [...diverse, ...ranked.filter(p => !diverse.includes(p))].slice(0, 6);
+  // Choose the highest-priority available silhouette, then show every model in it.
+  // If no suitable silhouette is stocked, leave the recommendations empty.
+  const recommendedShape = ranked[0]?.shape ?? null;
+  const frames = ranked.filter(item => item.shape === recommendedShape);
   return {
     shape,
-    shapes: adviceData.shapes,
+    shapes: recommendedShape ? [recommendedShape] : [],
+    recommendedShape,
     reason: adviceData.reason,
     confidence: measurements.confidence ?? 92,
     scores: measurements.scores,

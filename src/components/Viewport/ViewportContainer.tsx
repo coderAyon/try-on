@@ -271,7 +271,7 @@ export const ViewportContainer: React.FC<ViewportContainerProps> = ({
               )}
 
               {/* Lighting Preset Selector */}
-              <div className="hidden lg:flex items-center p-0.5 rounded-lg sm:rounded-xl bg-black/65 backdrop-blur-md border border-white/20 shadow-md">
+              <div className="hidden lg:flex h-8 items-center p-0.5 rounded-lg sm:rounded-xl bg-black/65 backdrop-blur-md border border-white/20 shadow-md">
                 {LIGHTING_PRESETS.map((preset) => (
                   <button
                     key={preset.id}
@@ -296,7 +296,7 @@ export const ViewportContainer: React.FC<ViewportContainerProps> = ({
                   soundEffects.playShutter();
                   onCaptureSnapshot();
                 }}
-                className="flex items-center gap-1.5 px-3.5 py-1.5 sm:px-4 sm:py-2 rounded-lg sm:rounded-xl bg-gradient-to-r from-[#7c3aed] to-[#6d28d9] hover:from-[#8b5cf6] hover:to-[#7c3aed] text-white font-bold text-[11px] sm:text-xs uppercase tracking-wider shadow-lg shadow-violet-500/35 hover:scale-105 active:scale-95 transition-all cursor-pointer border border-white/25"
+                className="flex items-center gap-1.5 px-3.5 py-1.5 sm:px-4 sm:py-2 lg:h-8 lg:py-0 rounded-lg sm:rounded-xl bg-gradient-to-r from-[#7c3aed] to-[#6d28d9] hover:from-[#8b5cf6] hover:to-[#7c3aed] text-white font-bold text-[11px] sm:text-xs uppercase tracking-wider shadow-lg shadow-violet-500/35 hover:scale-105 active:scale-95 transition-all cursor-pointer border border-white/25"
               >
                 <Camera className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-white" />
                 <span>Capture Look</span>

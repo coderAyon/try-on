@@ -305,7 +305,8 @@ export const SUNGLASSES_CATALOG: SunglassesProduct[] = [
     dimensions: { lensWidth: 53, bridgeWidth: 17, templeLength: 145 },
     thumbnailUrl: '/models/catalog-thumbnails/versace-ve4514d.png',
     model: {
-      path: '/models/versace_ve4514d.glb',
+      path: '/models/versace_ve4514d_premium.glb?revision=pantos-lens-7percent',
+      lensMeshes: ['Lens_Left', 'Lens_Right'],
       scaleMultiplier: 1.0,
       offsetY: 0.0,
       offsetZ: 0.0,
@@ -340,6 +341,48 @@ export const SUNGLASSES_CATALOG: SunglassesProduct[] = [
 ];
 
 SUNGLASSES_CATALOG.push(...createImportedCatalog(SUNGLASSES_CATALOG[0]));
+
+SUNGLASSES_CATALOG.push({
+  id: 'versace-ve2290',
+  name: 'VE2290 Greek Key',
+  brand: 'Versace',
+  modelCode: 'VE2290 1002/87',
+  category: 'Versace',
+  price: 384,
+  badge: 'New Arrival',
+  description: 'A rectangular gold metal silhouette with a double bridge, dark grey lenses, open Greek-key temples and polished black acetate tips.',
+  frameMaterial: 'Gold Metal / Black Acetate Temple Tips',
+  polarized: false,
+  uvProtection: 'UV400 100%',
+  suitableFaceShapes: ['Oval', 'Round', 'Heart', 'Diamond'],
+  dimensions: { lensWidth: 61, bridgeWidth: 13, templeLength: 145 },
+  thumbnailUrl: '/models/catalog-thumbnails/versace-ve2290.png',
+  model: {
+    path: '/models/versace_ve2290_high_detail.glb?finish=clean-polished-gold-5',
+    lensMeshes: ['Lens_Left', 'Lens_Right'],
+    rotationY: 0,
+    scaleMultiplier: 1,
+    offsetY: 0,
+    offsetZ: 0,
+  },
+  activeVariantIndex: 0,
+  variants: [{
+    name: 'Gold / Dark Grey',
+    frameHex: '#D4AF37',
+    lensHex: '#343B38',
+    metalness: 1,
+    roughness: 0.17,
+  }],
+  pbr: {
+    frameMetalness: 1,
+    frameRoughness: 0.17,
+    lensTransmission: 0.23,
+    lensRoughness: 0.115,
+    lensIor: 1.49,
+    lensReflectivity: 0.9,
+  },
+  svgPreview: 'aviator',
+});
 
 export const LIGHTING_PRESETS: LightingConfig[] = [
   {
