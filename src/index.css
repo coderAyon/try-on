@@ -1300,6 +1300,33 @@ body {
   cursor: not-allowed;
 }
 
+@media (max-width: 850px) {
+  .photo-workbench { grid-template-columns: minmax(0, 1fr); }
+  .photo-workbench > * { min-width: 0; }
+  .product-page-grid { grid-template-columns: minmax(0, 1fr); }
+  .frame-details { display: flex; margin-top: 0; gap: 10px; }
+  .frame-details .featured-preview { display: none; }
+  .frame-details .finish-options { margin-top: 0; }
+}
+
+@media (max-width: 640px) {
+  .photo-workspace { padding: 14px; border-radius: 16px; }
+  .photo-workspace-heading h1 { font-size: 24px; }
+  .photo-input-cards, .photo-setting-fields { grid-template-columns: minmax(0, 1fr); }
+  .photo-result-stage { height: min(580px, 75svh); min-height: 320px; }
+  .photo-result-tools { flex-wrap: wrap; }
+  .photo-workspace input, .photo-workspace select { font-size: 16px; }
+  .photo-url { flex-wrap: wrap; }
+  .photo-url input { min-width: 0; flex-basis: 100%; }
+  .fitting-viewport { min-height: 320px; }
+  .fitting-viewport button, .frame-save-look, .finish-swatches button { min-height: 44px; }
+  .finish-swatches button { min-width: 44px; }
+  .fitting-viewport .fit-scan { padding: 16px; }
+  .fitting-viewport .fit-scan h3 { color: #f3e8ff; }
+  .fitting-viewport .fit-scan p { color: #c4b5d8; }
+  .fit-scan p { font-size: 12px; line-height: 1.5; }
+}
+
 .photo-asset-card footer { display: flex; justify-content: space-between; align-items: center; gap: 6px; margin-top: 15px; color: #9d8ab8; font-size: 10px; }
 .photo-upload-action { display: flex; gap: 6px; align-items: center; position: relative; cursor: pointer; color: #c084fc; font-weight: 600; }
 .photo-upload-action input { position: absolute; inset: 0; opacity: 0; width: 100%; cursor: pointer; }
