@@ -23,6 +23,7 @@ export const LandmarkGlassesTryOn: React.FC<JeelizGlassesTryOnProps & { onCamera
   const [error, setError] = useState('');
   const [detected, setDetected] = useState(false);
   const [fps, setFps] = useState(0);
+  const [previewReady, setPreviewReady] = useState(false);
   useEffect(() => { propsRef.current.onCameraStateChange?.(status, error); }, [status, error]);
 
   useEffect(() => {
@@ -30,7 +31,7 @@ export const LandmarkGlassesTryOn: React.FC<JeelizGlassesTryOnProps & { onCamera
     if (!container || !background || !overlay) return;
     let cancelled = false, stream: MediaStream | null = null, landmarker: FaceLandmarker | null = null;
     let frame = 0, environment: THREE.WebGLRenderTarget | null = null;
-    let startupTimer = 0;
+    let startupTimer = 0, startupFailed = false;
     const video = document.createElement('video'); video.muted = true; video.playsInline = true;
     const scene = new THREE.Scene(); sceneRef.current = scene;
     const renderer = new THREE.WebGLRenderer({ canvas: overlay, alpha: true, antialias: true, preserveDrawingBuffer: true });
@@ -68,13 +69,14 @@ export const LandmarkGlassesTryOn: React.FC<JeelizGlassesTryOnProps & { onCamera
     const processFrame = () => {
       if (cancelled) return;
       frame = requestAnimationFrame(processFrame);
-      if (!landmarker || video.readyState < 2 || video.currentTime === lastVideoTime) return;
+      if (video.readyState < 2 || video.currentTime === lastVideoTime) return;
       lastVideoTime = video.currentTime;
       const now = performance.now();
       // Draw the exact camera frame used by inference, then its fitted overlay.
       const cover = Math.max(width / video.videoWidth, height / video.videoHeight);
       const sourceWidth = video.videoWidth * cover, sourceHeight = video.videoHeight * cover;
       ctx?.drawImage(video, (width - sourceWidth) / 2, (height - sourceHeight) / 2, sourceWidth, sourceHeight);
+      if (!landmarker) return;
       try {
         const result = landmarker.detectForVideo(video, now);
         const landmarks = result.faceLandmarks[0];
@@ -144,20 +146,31 @@ export const LandmarkGlassesTryOn: React.FC<JeelizGlassesTryOnProps & { onCamera
     };
     const start = async () => {
       await Promise.resolve(); if (cancelled) return;
-      setError(''); setStatus('Starting camera…'); propsRef.current.onLoadingChange?.(true);
+      setError(''); setPreviewReady(false); setStatus('Starting camera…'); propsRef.current.onLoadingChange?.(true);
       startupTimer = window.setTimeout(() => { if (!cancelled) setStatus('Allow camera access in the browser'); }, 12000);
       try {
-        const indices = await fetch('/tracking/face-triangles.json').then(response => { if (!response.ok) throw new Error('Face surface could not load'); return response.json(); });
-        if (cancelled) return; faceGeometry.setIndex(indices);
+        // Camera acquisition, surface loading and detector initialization overlap.
+        // Preview starts as soon as the video is available, independently of AI.
+        sanitizeEmscriptenEnvironment();
+        const ready = Promise.all([
+          fetch('/tracking/face-triangles.json').then(response => { if (!response.ok) throw new Error('Face surface could not load'); return response.json(); })
+            .then(indices => { if (!cancelled && !startupFailed) faceGeometry.setIndex(indices); }),
+          createFaceDetector('VIDEO').then(task => {
+            if (cancelled || startupFailed) task.close(); else landmarker = task;
+          }),
+        ]).then(() => ({ error: null }), error => ({ error }));
         stream = await openTryOnCamera(() => cancelled);
         if (!stream) return;
         video.srcObject = stream; await video.play();
-        if (cancelled) return; setStatus('Loading face landmarks…');
-        sanitizeEmscriptenEnvironment();
-        landmarker = await createFaceDetector('VIDEO');
-        if (cancelled) { landmarker.close(); return; }
-        window.clearTimeout(startupTimer); setStatus(''); propsRef.current.onLoadingChange?.(false); processFrame();
+        if (cancelled) return;
+        window.clearTimeout(startupTimer); setPreviewReady(true); setStatus('Loading face landmarks…'); processFrame();
+        const readiness = await ready;
+        if (cancelled) return;
+        if (readiness.error) throw readiness.error;
+        setStatus(''); propsRef.current.onLoadingChange?.(false);
       } catch (e) {
+        startupFailed = true; cancelAnimationFrame(frame);
+        landmarker?.close(); landmarker = null;
         stream?.getTracks().forEach(track => track.stop()); video.pause(); video.srcObject = null;
         window.clearTimeout(startupTimer);
         if (!cancelled) { setError(cameraErrorMessage(e)); setStatus(''); propsRef.current.onLoadingChange?.(false); }
@@ -217,7 +230,7 @@ export const LandmarkGlassesTryOn: React.FC<JeelizGlassesTryOnProps & { onCamera
     {!status && !error && <div className="absolute top-4 left-4 z-20 rounded-full bg-black/75 px-3 py-2 text-xs text-white">
       <span className={detected ? 'text-emerald-400' : 'text-amber-400'}>●</span> {detected ? 'Face tracking' : 'Face the camera'} · {fps} FPS
     </div>}
-    {status && !error && <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/70 text-sm text-white">{status}</div>}
+    {status && !error && <div className={previewReady ? 'absolute top-4 right-4 z-20 rounded-full bg-black/75 px-3 py-2 text-xs text-white' : 'absolute inset-0 z-20 flex items-center justify-center bg-black/70 text-sm text-white'}>{status}</div>}
     {error && <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-4 bg-black/90 p-6 text-white">
       <p className="text-sm text-center" role="alert">{error}</p><button className="rounded-lg bg-white px-4 py-2 text-black" onClick={() => setRetry(value => value + 1)}>Retry camera</button><button className="text-sm underline" onClick={() => props.onSwitchMode?.('photo')}>Use a photo instead</button>
     </div>}
