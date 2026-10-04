@@ -177,6 +177,10 @@ export const LandmarkGlassesTryOn: React.FC<JeelizGlassesTryOnProps & { onCamera
     const root = rootRef.current;
     if (!root) return;
     loadEyewearCADModel(props.product, props.product.variants[props.variantIndex] || props.product.variants[0]).then(model => {
+      if (cancelled) {
+        model.traverse(object => { if (object instanceof THREE.Mesh) for (const material of Array.isArray(object.material) ? object.material : [object.material]) material.dispose(); });
+        return;
+      }
       const rig = new EyewearRig(model, props.product.id);
       if (cancelled) { rig.dispose(); return; }
       const old = rigRef.current;

@@ -221,7 +221,19 @@ export function trimTryOnTempleTips(geometry: THREE.BufferGeometry, depths: read
   for (const group of groups) {
     const start = output.get('position')!.length / 3;
     for (let offset = group.start; offset + 2 < Math.min(count, group.start + group.count); offset += 3) {
-      const triangle = [0, 1, 2].map(n => read(index ? index.getX(offset + n) : offset + n));
+      const vertices = [0, 1, 2].map(n => index ? index.getX(offset + n) : offset + n);
+      const sideFast = vertices.reduce((sum, i) => sum + position.getX(i), 0) < 0 ? 0 : 1;
+      const inside = vertices.map(i => position.getZ(i) >= depths[sideFast]);
+      if (inside.every(Boolean)) {
+        // Unclipped triangles need no temporary per-vertex attribute objects.
+        for (const i of vertices) for (const [name, attribute] of attributes) {
+          const values = output.get(name)!;
+          for (let component = 0; component < attribute.itemSize; component++) values.push(attribute.getComponent(i, component));
+        }
+        continue;
+      }
+      if (!inside.some(Boolean)) continue;
+      const triangle = vertices.map(read);
       const side = triangle.reduce((sum, v) => sum + v.position[0], 0) < 0 ? 0 : 1;
       const cutoff = depths[side];
       const polygon: Vertex[] = [];
@@ -248,6 +260,10 @@ export function trimTryOnTempleTips(geometry: THREE.BufferGeometry, depths: read
 }
 
 // Each AR instance owns baked geometry. Never deform the showroom/cache geometry.
+const preparedRigs = new Map<string, {
+  geometries: THREE.BufferGeometry[]; sources: Float32Array[];
+  frontWidth: number; eyeDistance: number; hingeDepth: number; tails: THREE.Vector3[];
+}>();
 export class EyewearRig {
   readonly group = new THREE.Group();
   readonly eyeDistance: number;
@@ -260,6 +276,22 @@ export class EyewearRig {
   private lastRight: THREE.Vector3 | null = null;
   constructor(model: THREE.Group, private readonly productId?: string) {
     model.updateMatrixWorld(true);
+    const inputMeshes: THREE.Mesh[] = [];
+    model.traverse(object => { if (object instanceof THREE.Mesh && object.name !== 'contact-shadow') inputMeshes.push(object); });
+    const cacheKey = JSON.stringify([model.userData.bridgeExpansion, model.userData.templeContactFraction,
+      inputMeshes.map(mesh => [mesh.geometry.uuid, mesh.name, mesh.matrixWorld.elements])]);
+    const prepared = preparedRigs.get(cacheKey);
+    if (prepared) {
+      preparedRigs.delete(cacheKey); preparedRigs.set(cacheKey, prepared);
+      this.frontWidth = prepared.frontWidth; this.eyeDistance = prepared.eyeDistance;
+      this.hingeDepth = prepared.hingeDepth; this.tails = prepared.tails.map(tail => tail.clone());
+      this.meshes = inputMeshes.map((input, i) => {
+        const mesh = new THREE.Mesh(prepared.geometries[i].clone(), input.material);
+        mesh.name = input.name; mesh.renderOrder = input.renderOrder; this.group.add(mesh);
+        return { mesh, source: prepared.sources[i] };
+      });
+      return;
+    }
     let innerLensEdge = Infinity;
     const rawLensBounds = [new THREE.Box3(), new THREE.Box3()];
     model.traverse(object => {
@@ -358,6 +390,17 @@ export class EyewearRig {
       entry.mesh.geometry = trimTryOnTempleTips(original, cutoffs);
       entry.source = new Float32Array(entry.mesh.geometry.getAttribute('position').array);
       original.dispose();
+    }
+    preparedRigs.set(cacheKey, {
+      geometries: this.meshes.map(entry => entry.mesh.geometry.clone()), sources: this.meshes.map(entry => entry.source),
+      frontWidth: this.frontWidth, eyeDistance: this.eyeDistance, hingeDepth: this.hingeDepth,
+      tails: this.tails.map(tail => tail.clone()),
+    });
+    // Keep only three recent models; never retain an entire catalog's meshes.
+    if (preparedRigs.size > 3) {
+      const oldest = preparedRigs.keys().next().value!;
+      preparedRigs.get(oldest)!.geometries.forEach(geometry => geometry.dispose());
+      preparedRigs.delete(oldest);
     }
   }
   fittedScale(eyeSpan: number, faceWidth: number, isFrontal = true) {
