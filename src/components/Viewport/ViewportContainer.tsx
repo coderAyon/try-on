@@ -161,7 +161,7 @@ export const ViewportContainer: React.FC<ViewportContainerProps> = ({
       <div
         ref={mirrorContainerRef}
         onPointerMove={isSplitActive ? handleSplitPointerMove : undefined}
-        className="fitting-viewport relative w-full aspect-[4/3] sm:aspect-[16/9] bg-[#120c1d] rounded-3xl overflow-hidden border-2 border-[#d8b4fe]/80 shadow-[0_20px_50px_-10px_rgba(109,40,217,0.18)] flex items-center justify-center group"
+        className="fitting-viewport relative w-full aspect-[3/4] sm:aspect-[16/9] bg-[#120c1d] rounded-3xl overflow-hidden border-2 border-[#d8b4fe]/80 shadow-[0_20px_50px_-10px_rgba(109,40,217,0.18)] flex items-center justify-center group"
       >
         {/* Webcam mode: Jeeliz FaceFilter (6DOF, rock-solid face-locked glasses) */}
         {mode === 'webcam' && !cameraEnabled ? <div className="fit-scan"><Camera size={32} /><h3>Your camera is off</h3><p>Allow camera access to try frames on your face. Your browser may ask for permission. You can stop the camera at any time.</p><button className="frame-capture" onClick={onEnableCamera}>Allow camera & start try-on</button></div> : mode === 'webcam' ? (
