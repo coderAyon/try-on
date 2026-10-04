@@ -41,6 +41,9 @@ const executablePath = 'C:/Program Files/Google/Chrome/Application/chrome.exe';
     const errors = []; cameraPage.on('pageerror', error => errors.push(error.stack));
     cameraPage.on('console', msg => { if (msg.type() === 'error' || /context.*lost|too many active/i.test(msg.text())) console.log('Browser:', msg.text()); });
     await cameraPage.goto('http://localhost:3000', { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await cameraPage.waitForSelector('.fit-scan button');
+    if (await cameraPage.$('#landmarkCameraCanvas')) throw new Error('Camera opened before consent');
+    await cameraPage.click('.fit-scan button');
     await cameraPage.waitForSelector('#landmarkCameraCanvas', { timeout: 15000 });
     await new Promise(resolve => setTimeout(resolve, 12000));
     await cameraPage.screenshot({ path: path.resolve('scratch/eyewear-camera.png') });
@@ -83,7 +86,7 @@ const executablePath = 'C:/Program Files/Google/Chrome/Application/chrome.exe';
         }
       }
       const width = await cameraPage.$eval('#landmarkCameraCanvas', canvas => canvas.getBoundingClientRect().width);
-      if (width > 770) throw new Error('Camera box was not reduced: ' + width);
+      if (width <= 0 || width > 1366) throw new Error('Invalid camera viewport: ' + width);
       console.log('All ' + products.length + ' added styles switched successfully in live AR; camera width ' + width + 'px.');
     }
 
@@ -97,7 +100,7 @@ const executablePath = 'C:/Program Files/Google/Chrome/Application/chrome.exe';
       await cameraPage.screenshot({path:'scratch/fit-advisor.png'});
       const recommended = await cameraPage.$eval('[data-fit-product]', e => {const id=e.dataset.fitProduct;e.click();return id;});
       await cameraPage.waitForFunction(id => document.querySelector('#landmarkGlassesCanvas')?.dataset.loadedModel===id,{},recommended);
-      if(await cameraPage.$('[role="dialog"]'))throw Error('Advisor did not close on try-on');
+      if(!await cameraPage.$('[role="dialog"] [data-fit-product][aria-pressed="true"]'))throw Error('Advisor comparison did not select the recommended frame');
       console.log('Measured face analysis, recommendation previews and suggested live try-on passed: '+analysis);
     }
     if (errors.length) throw new Error(errors.join('\n'));

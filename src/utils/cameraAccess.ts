@@ -10,12 +10,12 @@ export async function openTryOnCamera(cancelled: () => boolean): Promise<MediaSt
   try {
     if (cancelled()) return null;
     if (!navigator.mediaDevices?.getUserMedia) throw new Error('Camera access requires HTTPS or localhost and a supported browser.');
-    const mobile = window.matchMedia('(pointer: coarse)').matches;
+    const mobile = typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches;
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
           video: attempt === 0 ? { facingMode: 'user', width: { ideal: mobile ? 1280 : 1920 }, height: { ideal: mobile ? 720 : 1080 }, frameRate: { ideal: 60, max: 60 } }
-            : { facingMode: 'user', frameRate: { ideal: 60, max: 60 } },
+            : true,
           audio: false,
         });
         if (cancelled()) { stream.getTracks().forEach(track => track.stop()); await pause(); return null; }
