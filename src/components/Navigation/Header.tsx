@@ -15,18 +15,24 @@ interface HeaderProps {
   wishlistCount?: number;
 }
 
-export const Header: React.FC<HeaderProps> = ({ onOpenFitAdvisor, isAudioMuted, onToggleAudio }) => (
-  <header className="sticky top-0 z-50 w-full border-b select-none">
+export const Header: React.FC<HeaderProps> = ({ isAudioMuted, onToggleAudio }) => (
+  <header className="sticky top-0 z-50 w-full select-none">
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
       <div className="flex items-center gap-3">
-        <span className="text-[23px] font-semibold tracking-tight">lumen<span className="text-[#9a78bd]">.</span>vision</span>
-        <span className="hidden sm:block text-[8px] tracking-[.16em] text-slate-500 uppercase border-l border-[#e9e1f1] pl-3">Eyewear studio</span>
+        <div className="flex items-baseline">
+          <span className="text-[24px] font-bold tracking-tight text-[#180e2b]">lumen</span>
+          <span className="text-[24px] font-bold tracking-tight bg-gradient-to-r from-[#7c3aed] to-[#a855f7] bg-clip-text text-transparent">.vision</span>
+        </div>
+        <span className="hidden sm:block text-[9px] font-bold tracking-[.22em] text-[#6d5b83] uppercase border-l-2 border-[#d8b4fe] pl-3">Eyewear Studio</span>
       </div>
       <div className="flex items-center gap-3">
-        <button aria-label={isAudioMuted ? 'Unmute experience audio' : 'Mute experience audio'} onClick={onToggleAudio} className="p-2 text-slate-500 hover:text-[#725393] transition-colors">
-          {isAudioMuted ? <VolumeX size={16} /> : <Volume2 size={16} />}
+        <button
+          aria-label={isAudioMuted ? 'Unmute experience audio' : 'Mute experience audio'}
+          onClick={onToggleAudio}
+          className="p-2.5 rounded-xl text-[#6d28d9] hover:text-[#4c1d95] hover:bg-[#ede0fc] border border-[#d8b4fe]/60 bg-white/70 shadow-sm transition-all cursor-pointer"
+        >
+          {isAudioMuted ? <VolumeX size={17} /> : <Volume2 size={17} />}
         </button>
-
       </div>
     </div>
   </header>

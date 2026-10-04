@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { frameFitScale } from '../data/frameFitProfiles';
 
 export interface Landmark { x: number; y: number; z: number }
 export function landmarkWorld(p: Landmark, width: number, height: number): THREE.Vector3 {
@@ -20,10 +21,30 @@ export function eyewearPose(landmarks: Landmark[], width: number, height: number
   const yAxis = new THREE.Vector3().crossVectors(zAxis, xAxis).normalize();
   const quaternion = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(xAxis, yAxis, zAxis));
   const position = leftEye.clone().add(rightEye).multiplyScalar(0.5);
-  // Keep x/y on the eye line; nasal depth sets the front-plane contact clearance.
   const bridge = world(168);
+  // Natural resting position:
+  // Sunglasses bridge rests on the nasal saddle / radix (landmark 168),
+  // naturally framing the supraorbital brow and centering the eyes at the optical 62-65% height of the lenses.
+  const bridgeHeight = bridge.clone().sub(position).dot(yAxis);
+  const naturalBrowLift = Math.max(eyeSpan * 0.10, bridgeHeight * 0.80);
+  position.addScaledVector(yAxis, naturalBrowLift);
   position.addScaledVector(zAxis, bridge.clone().sub(position).dot(zAxis) + eyeSpan * 0.025);
-  return { position, bridge, quaternion, eyeSpan, leftTemple: world(127), rightTemple: world(356), zAxis, yAxis, faceWidth: Math.abs(world(234).sub(world(454)).dot(xAxis)) };
+
+  const euler = new THREE.Euler().setFromQuaternion(quaternion, 'YXZ');
+  const isFrontal = Math.abs(euler.y) < 0.26 && Math.abs(euler.x) < 0.26;
+
+  return {
+    position,
+    bridge,
+    quaternion,
+    eyeSpan,
+    leftTemple: world(127),
+    rightTemple: world(356),
+    zAxis,
+    yAxis,
+    faceWidth: Math.abs(world(234).sub(world(454)).dot(xAxis)),
+    isFrontal,
+  };
 }
 
 type EyewearPose = NonNullable<ReturnType<typeof eyewearPose>>;
@@ -34,58 +55,103 @@ export class StableEyewearPose {
   private localAnchor: THREE.Vector3 | null = null;
   private previousSpan = 0;
   private span = 0;
+  private frontalSpan: number | null = null;
   private velocity = new THREE.Vector3();
   private bridge: THREE.Vector3 | null = null;
   private previousBridge = new THREE.Vector3();
   private bridgeVelocity = new THREE.Vector3();
   private spanVelocity = 0;
   private time = 0;
-  reset() { this.rotation = null; this.previousRotation = null; this.localAnchor = null; this.bridge = null; this.time = 0; this.velocity.set(0, 0, 0); this.bridgeVelocity.set(0, 0, 0); this.spanVelocity = 0; }
+
+  reset() {
+    this.rotation = null;
+    this.previousRotation = null;
+    this.localAnchor = null;
+    this.bridge = null;
+    this.time = 0;
+    this.velocity.set(0, 0, 0);
+    this.bridgeVelocity.set(0, 0, 0);
+    this.spanVelocity = 0;
+    this.frontalSpan = null;
+  }
+
   update(pose: EyewearPose, now: number): EyewearPose {
-    const dt = THREE.MathUtils.clamp((now - this.time) / 1000, 1 / 120, .1);
+    const dt = THREE.MathUtils.clamp((now - this.time) / 1000, 1 / 120, 0.1);
     const alpha = (cutoff: number) => 1 - Math.exp(-2 * Math.PI * cutoff * dt);
     const offset = pose.position.clone().sub(pose.bridge).applyQuaternion(pose.quaternion.clone().invert()).divideScalar(pose.eyeSpan);
+
     if (!this.rotation || !this.localAnchor || now - this.time > 250) {
-      this.rotation = pose.quaternion.clone(); this.localAnchor = offset.clone(); this.span = pose.eyeSpan;
-      this.previousRotation = pose.quaternion.clone(); this.previousSpan = pose.eyeSpan;
-      this.bridge = pose.bridge.clone(); this.previousBridge.copy(pose.bridge);
-      this.velocity.set(0, 0, 0); this.bridgeVelocity.set(0, 0, 0); this.spanVelocity = 0;
+      this.rotation = pose.quaternion.clone();
+      this.localAnchor = offset.clone();
+      this.span = pose.eyeSpan;
+      this.frontalSpan = pose.eyeSpan;
+      this.previousRotation = pose.quaternion.clone();
+      this.previousSpan = pose.eyeSpan;
+      this.bridge = pose.bridge.clone();
+      this.previousBridge.copy(pose.bridge);
+      this.velocity.set(0, 0, 0);
+      this.bridgeVelocity.set(0, 0, 0);
+      this.spanVelocity = 0;
     } else {
+      // 1. Intelligent Angular Velocity & Rotation Responsiveness
       const delta = pose.quaternion.clone().multiply(this.previousRotation!.clone().invert());
       if (delta.w < 0) delta.set(-delta.x, -delta.y, -delta.z, -delta.w);
       const derivative = new THREE.Vector3(delta.x, delta.y, delta.z);
       const length = derivative.length();
       if (length > 1e-8) derivative.multiplyScalar(2 * Math.atan2(length, delta.w) / (length * dt));
-      // Signed velocity cancels alternating tracking noise instead of mistaking
-      // every tiny shake for a deliberate fast turn.
-      this.velocity.lerp(derivative, alpha(2));
-      // Quiet poses are damped; deliberate turns raise the cutoff immediately.
-      this.rotation.slerp(pose.quaternion, alpha(.55 + Math.max(0, this.velocity.length() - .08) * 8));
-      this.localAnchor.lerp(offset, alpha(.7));
-      // Signed derivatives prevent alternating noise from opening the filter.
-      this.spanVelocity += ((pose.eyeSpan - this.previousSpan) / Math.max(8, this.previousSpan) / dt - this.spanVelocity) * alpha(2);
-      const scaleResidual = Math.abs(pose.eyeSpan - this.span) / Math.max(8, this.span);
-      this.span += (pose.eyeSpan - this.span) * alpha(.65 + Math.max(0, Math.abs(this.spanVelocity) - .02) * 20 + Math.max(0, scaleResidual - .01) * 120);
+
+      this.velocity.lerp(derivative, alpha(3));
+      const rotSpeed = this.velocity.length();
+      // Responsive cutoff: adapts smoothly to speed so turns follow immediately with zero lag
+      const rotCutoff = 1.2 + Math.max(0, rotSpeed - 0.03) * 18 + Math.min(12, rotSpeed * 35);
+      this.rotation.slerp(pose.quaternion, alpha(rotCutoff));
+      this.localAnchor.lerp(offset, alpha(0.8));
+
+      // 2. Continuous Adaptive One-Euro Scale Filter (Butter-smooth zoom in/out + rock-solid stationary lock)
+      // Low-pass filtered derivative (cutoff 0.85 Hz) prevents detector frame-to-frame noise from spiking velocity
+      const spanDerivative = (pose.eyeSpan - this.previousSpan) / (dt * Math.max(8, this.span));
+      this.spanVelocity += (spanDerivative - this.spanVelocity) * alpha(0.85);
+
+      // Deadband filters out stationary sensor tremor so filter stays locked at fmin when sitting still
+      const zoomSpeed = Math.max(0, Math.abs(this.spanVelocity) - 0.05);
+
+      // Rotational damping: suppress spurious scale expansion during rapid head turns
+      const rotDamping = 1.0 / (1.0 + Math.max(0, rotSpeed - 0.03) * 10.0);
+
+      // Adaptive cutoff frequency:
+      // - Stationary lock (zoomSpeed === 0): cutoff = 0.38 Hz guarantees rock-solid, zero-tremor stability ("kapakapi kora jabe na")
+      // - Active zoom (zoomSpeed > 0): smoothly scales cutoff up to 4.5+ Hz for fluid, lag-free zoom in/out
+      const spanCutoff = 0.38 + zoomSpeed * 28.0 * rotDamping;
+      this.span += (pose.eyeSpan - this.span) * alpha(spanCutoff);
+
+      // 3. Fast Nose Bridge Position Responsiveness
       const bridgeDerivative = pose.bridge.clone().sub(this.previousBridge).divideScalar(dt * pose.eyeSpan);
-      this.bridgeVelocity.lerp(bridgeDerivative, alpha(2));
+      this.bridgeVelocity.lerp(bridgeDerivative, alpha(3));
       const speed = this.bridgeVelocity.length();
-      const displacement = this.bridge!.distanceTo(pose.bridge) / pose.eyeSpan;
-      // The residual opens response for a sudden move even before velocity settles.
-      const cutoff = .65 + Math.max(0, speed - .025) * 18 + Math.max(0, displacement - .015) * 100;
-      this.bridge!.lerp(pose.bridge, alpha(cutoff));
+      const displacement = this.bridge!.distanceTo(pose.bridge) / Math.max(8, pose.eyeSpan);
+      const posCutoff = 1.4 + Math.max(0, speed - 0.02) * 22 + Math.max(0, displacement - 0.01) * 120;
+      this.bridge!.lerp(pose.bridge, alpha(posCutoff));
     }
+
     this.previousBridge.copy(pose.bridge);
-    this.time = now; this.previousRotation = pose.quaternion.clone(); this.previousSpan = pose.eyeSpan;
+    this.time = now;
+    this.previousRotation = pose.quaternion.clone();
+    this.previousSpan = pose.eyeSpan;
+
     const quaternion = this.rotation.clone();
     const eyeSpan = this.span;
     const bridge = this.bridge!.clone();
     const position = this.localAnchor.clone().multiplyScalar(eyeSpan).applyQuaternion(quaternion).add(bridge);
-    // Width and eye span must represent the same filtered camera distance.
-    // Mixing current cheek width with delayed eye span corrupts the fit ratio
-    // during zoom and makes that incorrect ratio linger after the motion ends.
-    return { ...pose, bridge, position, quaternion, eyeSpan, faceWidth: pose.faceWidth / pose.eyeSpan * eyeSpan,
+    return {
+      ...pose,
+      bridge,
+      position,
+      quaternion,
+      eyeSpan,
+      faceWidth: (pose.faceWidth / pose.eyeSpan) * eyeSpan,
       yAxis: new THREE.Vector3(0, 1, 0).applyQuaternion(quaternion),
-      zAxis: new THREE.Vector3(0, 0, 1).applyQuaternion(quaternion) };
+      zAxis: new THREE.Vector3(0, 0, 1).applyQuaternion(quaternion),
+    };
   }
 }
 
@@ -149,7 +215,7 @@ export class EyewearRig {
   private tails = [new THREE.Vector3(-4.4, 0, -6), new THREE.Vector3(4.4, 0, -6)];
   private lastLeft: THREE.Vector3 | null = null;
   private lastRight: THREE.Vector3 | null = null;
-  constructor(model: THREE.Group) {
+  constructor(model: THREE.Group, private readonly productId?: string) {
     model.updateMatrixWorld(true);
     let innerLensEdge = Infinity;
     const rawLensBounds = [new THREE.Box3(), new THREE.Box3()];
@@ -251,11 +317,16 @@ export class EyewearRig {
       original.dispose();
     }
   }
-  fittedScale(eyeSpan: number, faceWidth: number) {
+  fittedScale(eyeSpan: number, faceWidth: number, isFrontal = true) {
     // Smooth proportions only; distance and pose remain immediate.
-    const ratio = THREE.MathUtils.clamp(faceWidth / eyeSpan, 1.7, 2.8);
-    this.fitRatio = this.fitRatio === null ? ratio : this.fitRatio + (ratio - this.fitRatio) * .035;
-    return eyeSpan * Math.max(1 / this.eyeDistance, this.fitRatio * 1.04 / this.frontWidth);
+    const ratio = THREE.MathUtils.clamp(faceWidth / Math.max(1, eyeSpan), 1.8, 2.8);
+    if (this.fitRatio === null) {
+      this.fitRatio = ratio;
+    } else if (isFrontal) {
+      // Calibrate face-to-eye width proportion during frontal view
+      this.fitRatio += (ratio - this.fitRatio) * 0.035;
+    }
+    return eyeSpan * Math.max(1 / this.eyeDistance, this.fitRatio * 1.04 / this.frontWidth) * frameFitScale(this.productId);
   }
   fitTemples(leftEar: THREE.Vector3, rightEar: THREE.Vector3) {
     // These are head-local proportions, not screen positions. Reuse the fitted

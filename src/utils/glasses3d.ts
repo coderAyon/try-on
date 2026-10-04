@@ -598,29 +598,30 @@ export function createSunglasses3D(
     }
 
     case 'Sport': {
-      // Oakley Radar EV Path: Aerodynamic Wrap Shield covering full face width 8.8
+      // Oakley Radar EV Path: Aerodynamic Wrap Shield - calibrated proportional fit
+      const sportHalfWidth = halfHingeWidth * 0.88;
       const browCurve = new THREE.CubicBezierCurve3(
-        new THREE.Vector3(-halfHingeWidth, 0.50, -1.4),
-        new THREE.Vector3(-2.2, 1.65, 0.25),
-        new THREE.Vector3(2.2, 1.65, 0.25),
-        new THREE.Vector3(halfHingeWidth, 0.50, -1.4)
+        new THREE.Vector3(-sportHalfWidth, 0.65, -1.2),
+        new THREE.Vector3(-1.9, 1.65, 0.20),
+        new THREE.Vector3(1.9, 1.65, 0.20),
+        new THREE.Vector3(sportHalfWidth, 0.65, -1.2)
       );
       const browMesh = new THREE.Mesh(
-        new THREE.TubeGeometry(browCurve, 40, 0.22, 8, false),
+        new THREE.TubeGeometry(browCurve, 40, 0.20, 8, false),
         frameMaterial
       );
       root.add(browMesh);
 
-      // Toric Aerodynamic Wrap Shield Lens - properly oriented horizontally across face
-      const shieldGeom = new THREE.CylinderGeometry(4.5, 4.5, 2.4, 48, 1, true, -Math.PI / 2.7, (2 * Math.PI) / 2.7);
+      // Toric Aerodynamic Wrap Shield Lens - centered over eyes and nasal bridge
+      const shieldGeom = new THREE.CylinderGeometry(3.9, 3.9, 2.05, 48, 1, true, -Math.PI / 2.7, (2 * Math.PI) / 2.7);
       const shield = new THREE.Mesh(shieldGeom, lensMaterial);
-      shield.position.set(0, -0.10, -3.6);
-      shield.scale.set(0.98, 0.82, 1.0);
+      shield.position.set(0, 0.20, -3.1);
+      shield.scale.set(0.92, 0.78, 0.95);
       root.add(shield);
 
-      const centerClipGeom = new THREE.BoxGeometry(0.55, 0.85, 0.45);
+      const centerClipGeom = new THREE.BoxGeometry(0.48, 0.75, 0.40);
       const centerClip = new THREE.Mesh(centerClipGeom, frameMaterial);
-      centerClip.position.set(0, 0.38, 0.16);
+      centerClip.position.set(0, 0.50, 0.16);
       root.add(centerClip);
       break;
     }

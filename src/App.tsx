@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { SUNGLASSES_CATALOG } from './data/catalog';
 import {
   SunglassesProduct,
@@ -183,9 +183,10 @@ export const App: React.FC = () => {
     setSnapshotTrigger(Date.now());
   };
 
-  const handleSnapshotReady = (dataUrl: string) => {
+  const handleSnapshotReady = useCallback((dataUrl: string) => {
     setSnapshotDataUrl(dataUrl);
     setIsSnapshotModalOpen(true);
+    setSnapshotTrigger(0);
 
     // Save snapshot to backend lookbook
     const currentVariant = activeProduct.variants[variantIndex] || activeProduct.variants[0];
@@ -197,7 +198,7 @@ export const App: React.FC = () => {
       ipdMm: stats.estimatedIpdMm,
       faceShape: 'Oval',
     });
-  };
+  }, [activeProduct, variantIndex, stats.estimatedIpdMm]);
 
   const handleToggleAudio = () => {
     const enabled = soundEffects.toggleSound();
@@ -205,7 +206,7 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div className="retail-shell min-h-screen bg-black text-white font-sans flex flex-col justify-between selection:bg-red-600 selection:text-white">
+    <div className="retail-shell min-h-screen text-[#180e2b] font-sans flex flex-col justify-between selection:bg-[#7c3aed] selection:text-white">
       {/* Official Sunglass Hut Navigation Header */}
       <Header
         currentMode={mode}
@@ -255,16 +256,45 @@ export const App: React.FC = () => {
           </section>
 
           <aside className="frame-details">
-            <div className="frame-details-top"><span className="section-eyebrow">YOUR FRAME</span><span className="frame-number">01 / SELECTED</span></div>
-            <div className="featured-preview"><ProductThumbnail product={activeProduct} variantIndex={variantIndex} /></div>
+            <div className="frame-details-top">
+              <span className="section-eyebrow">YOUR FRAME</span>
+              <span className="frame-number">01 / SELECTED</span>
+            </div>
+            <div className="featured-preview">
+              <div className="featured-preview-glow" />
+              <ProductThumbnail product={activeProduct} variantIndex={variantIndex} />
+            </div>
             <span className="frame-brand">{activeProduct.brand === 'Model Library' ? 'Studio collection' : activeProduct.brand}</span>
             <h2>{activeProduct.name}</h2>
-            <div className="finish-options">
-              <span className="detail-label">FINISH</span>
-              <div className="finish-swatches">{activeProduct.variants.map((variant, i) => <button key={i} aria-label={variant.name} aria-pressed={i === variantIndex} title={variant.name} onClick={() => handleVariantChange(i)} style={{ backgroundColor: variant.frameHex }}>{i === variantIndex && <Check size={12} />}</button>)}</div>
-              <p>{activeProduct.variants[variantIndex]?.name ?? activeProduct.variants[0].name}</p>
+            <div className="frame-luxury-specs">
+              <span className="luxury-spec-pill">{activeProduct.frameMaterial}</span>
+              <span className="luxury-spec-pill">{activeProduct.polarized ? 'Polarized' : 'Optical Grade'}</span>
+              <span className="luxury-spec-pill">{activeProduct.dimensions.lensWidth}□{activeProduct.dimensions.bridgeWidth} mm</span>
             </div>
-            <button className="frame-capture" onClick={handleCaptureSnapshot}>Save this look <ArrowUpRight size={17} /></button>
+            <div className="finish-options">
+              <div className="finish-header">
+                <span className="detail-label">FINISH</span>
+                <span className="finish-active-name">{activeProduct.variants[variantIndex]?.name ?? activeProduct.variants[0].name}</span>
+              </div>
+              <div className="finish-swatches">
+                {activeProduct.variants.map((variant, i) => (
+                  <button
+                    key={i}
+                    aria-label={variant.name}
+                    aria-pressed={i === variantIndex}
+                    title={variant.name}
+                    onClick={() => handleVariantChange(i)}
+                    style={{ backgroundColor: variant.frameHex }}
+                  >
+                    {i === variantIndex && <Check size={10} />}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <button className="frame-capture" onClick={handleCaptureSnapshot}>
+              <span>Save this look</span>
+              <ArrowUpRight size={14} />
+            </button>
             <span className="frame-hint">Choose a frame below to make it yours.</span>
           </aside>
           </div>
@@ -298,7 +328,11 @@ export const App: React.FC = () => {
       {/* 4. High-Resolution Snapshot Preview Modal */}
       <SnapshotPreviewModal
         isOpen={isSnapshotModalOpen}
-        onClose={() => setIsSnapshotModalOpen(false)}
+        onClose={() => {
+          setIsSnapshotModalOpen(false);
+          setSnapshotTrigger(0);
+          setSnapshotDataUrl(null);
+        }}
         snapshotDataUrl={snapshotDataUrl}
         product={activeProduct}
       />

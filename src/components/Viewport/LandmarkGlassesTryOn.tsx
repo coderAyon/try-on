@@ -7,7 +7,7 @@ import { loadEyewearCADModel } from '../../utils/cadModelManager';
 import { EyewearRig, eyewearPose, landmarkWorld, StableEyewearPose } from '../../utils/landmarkEyewear';
 import { generateStudioEnvironment } from '../../utils/environmentGenerator';
 import { openTryOnCamera, cameraErrorMessage } from '../../utils/cameraAccess';
-import { createFaceDetector } from '../../utils/faceDetector';
+import { createFaceDetector, sanitizeEmscriptenEnvironment } from '../../utils/faceDetector';
 
 export const LandmarkGlassesTryOn: React.FC<JeelizGlassesTryOnProps & { onCameraStateChange?: (message: string, error: string) => void }> = (props) => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -81,7 +81,7 @@ export const LandmarkGlassesTryOn: React.FC<JeelizGlassesTryOnProps & { onCamera
         const fit = propsRef.current.calibration;
         if (pose && rig) {
           lostFrames = 0;
-          const scale = rig.fittedScale(pose.eyeSpan, pose.faceWidth) * (fit?.scale ?? 1) * (63 + (fit?.ipdOffsetMm ?? 0)) / 63;
+          const scale = rig.fittedScale(pose.eyeSpan, pose.faceWidth, pose.isFrontal) * (fit?.scale ?? 1) * (63 + (fit?.ipdOffsetMm ?? 0)) / 63;
           root.position.copy(pose.position);
           root.position.addScaledVector(pose.yAxis, (fit?.verticalOffsetMm ?? 0) * pose.eyeSpan / 63);
           root.position.addScaledVector(pose.zAxis, (fit?.depthOffsetMm ?? 0) * pose.eyeSpan / 63);
@@ -150,6 +150,7 @@ export const LandmarkGlassesTryOn: React.FC<JeelizGlassesTryOnProps & { onCamera
         if (!stream) return;
         video.srcObject = stream; await video.play();
         if (cancelled) return; setStatus('Loading face landmarks…');
+        sanitizeEmscriptenEnvironment();
         landmarker = await createFaceDetector('VIDEO');
         if (cancelled) { landmarker.close(); return; }
         window.clearTimeout(startupTimer); setStatus(''); propsRef.current.onLoadingChange?.(false); processFrame();
@@ -173,7 +174,7 @@ export const LandmarkGlassesTryOn: React.FC<JeelizGlassesTryOnProps & { onCamera
     const root = rootRef.current;
     if (!root) return;
     loadEyewearCADModel(props.product, props.product.variants[props.variantIndex] || props.product.variants[0]).then(model => {
-      const rig = new EyewearRig(model);
+      const rig = new EyewearRig(model, props.product.id);
       if (cancelled) { rig.dispose(); return; }
       const old = rigRef.current;
       if (old) { root.remove(old.group); old.dispose(); }
@@ -190,15 +191,17 @@ export const LandmarkGlassesTryOn: React.FC<JeelizGlassesTryOnProps & { onCamera
     return () => env.dispose();
   }, [props.lightingPreset, retry]);
 
+  const lastSnapshotRef = useRef<number>(0);
   useEffect(() => {
-    if (!props.snapshotTrigger || !backgroundRef.current || !overlayRef.current) return;
+    if (!props.snapshotTrigger || props.snapshotTrigger === lastSnapshotRef.current || !backgroundRef.current || !overlayRef.current) return;
+    lastSnapshotRef.current = props.snapshotTrigger;
     const output = document.createElement('canvas'); const background = backgroundRef.current;
     output.width = background.width; output.height = background.height;
     const ctx = output.getContext('2d'); if (!ctx) return;
     if (props.mirror !== false) { ctx.translate(output.width, 0); ctx.scale(-1, 1); }
     ctx.drawImage(background, 0, 0, output.width, output.height); ctx.drawImage(overlayRef.current, 0, 0, output.width, output.height);
     props.onSnapshotReady?.(output.toDataURL('image/png'));
-  }, [props.snapshotTrigger]);
+  }, [props.snapshotTrigger, props.mirror]);
 
   const flip = props.mirror !== false ? '-scale-x-100' : '';
   return <div ref={containerRef} className="relative w-full h-full bg-black overflow-hidden">

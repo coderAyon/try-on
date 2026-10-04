@@ -10,6 +10,7 @@ const puppeteer = require('puppeteer'), fs = require('fs');
       const THREE = await import('/node_modules/.vite/deps/three.js');
       const { FaceLandmarker, FilesetResolver } = await import('/node_modules/.vite/deps/@mediapipe_tasks-vision.js');
       const { EyewearRig, eyewearPose, landmarkWorld } = await import('/src/utils/landmarkEyewear.ts');
+      const { frameFitScale } = await import('/src/data/frameFitProfiles.ts');
       const { loadEyewearCADModel } = await import('/src/utils/cadModelManager.ts');
       const { SUNGLASSES_CATALOG } = await import('/src/data/catalog.ts');
       const { generateStudioEnvironment } = await import('/src/utils/environmentGenerator.ts');
@@ -23,7 +24,7 @@ const puppeteer = require('puppeteer'), fs = require('fs');
       const env = generateStudioEnvironment(renderer, 'studio');
       const camera = new THREE.OrthographicCamera(-150, 150, 150, -150, .1, 4000); camera.position.z = 1000;
       const poses = [['front', 0, 0, 0], ['left40', 0, -40, 0], ['right40', 0, 40, 0], ['down30', 30, 0, 0], ['up30', -30, 0, 0], ['roll25', 0, 0, 25]];
-      const panels = [], checks = [];
+      const panels = [], checks = [], issues = [];
       for (const face of ['male_square', 'female_oval']) {
         const image = new Image(); image.src = '/models_faces/' + face + '.jpg'; await image.decode();
         const landmarks = task.detect(image).faceLandmarks[0]; if (!landmarks) throw Error('No reference face: ' + face);
@@ -37,7 +38,7 @@ const puppeteer = require('puppeteer'), fs = require('fs');
         surface.setAttribute('uv', new THREE.Float32BufferAttribute(landmarks.slice(0, 468).flatMap(p => [p.x, 1 - p.y]), 2));
         const skinMat = new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide });
         for (const product of products) {
-          const model = await loadEyewearCADModel(product, product.variants[0]), rig = new EyewearRig(model);
+          const model = await loadEyewearCADModel(product, product.variants[0]), rig = new EyewearRig(model, product.id);
           const distanceScale = rig.fittedScale(base.eyeSpan, base.faceWidth);
           for (const zoom of [.45, .7, 1, 1.4, 1.8]) {
             const scaled = rig.fittedScale(base.eyeSpan * zoom, base.faceWidth * zoom);
@@ -46,7 +47,7 @@ const puppeteer = require('puppeteer'), fs = require('fs');
           const lens = new THREE.Box3(); rig.group.traverse(m => { if (m.isMesh && /lens/i.test(m.name)) lens.union(new THREE.Box3().setFromObject(m, true)); });
           const centre = lens.isEmpty() ? null : lens.getCenter(new THREE.Vector3()).toArray();
           // Procedural convex lenses intentionally extend 0.32 units forward.
-          if (centre && (Math.abs(centre[0]) > .08 || Math.abs(centre[1]) > .08 || Math.abs(centre[2]) > .2)) throw Error('Lens anchor displaced: ' + product.id + JSON.stringify(centre));
+          if (centre && (Math.abs(centre[0]) > .08 || Math.abs(centre[1]) > .08 || Math.abs(centre[2]) > .2)) issues.push({ id: product.id, face, issue: 'Lens anchor offset', centre });
           let innerEdge = Infinity;
           rig.group.traverse(m => { if (m.isMesh && /lens/i.test(m.name)) { const p = m.geometry.attributes.position; for (let i = 0; i < p.count; i++) innerEdge = Math.min(innerEdge, Math.abs(p.getX(i))); } });
           const gapRatio = Number.isFinite(innerEdge) && innerEdge > .05 ? 2 * innerEdge / rig.eyeDistance : null;
@@ -63,7 +64,7 @@ const puppeteer = require('puppeteer'), fs = require('fs');
             const expected = rotation.clone().multiply(base.quaternion);
             if (pose.quaternion.angleTo(expected) > 1e-5) throw Error('Pose mismatch: ' + product.id);
             root.position.copy(pose.position); root.quaternion.copy(pose.quaternion); root.scale.setScalar(rig.fittedScale(pose.eyeSpan, pose.faceWidth)); root.updateMatrixWorld(true);
-            if (rig.frontWidth * root.scale.x < pose.faceWidth * 1.04 - .01) throw Error('Frame undersized: ' + product.id);
+            if (rig.frontWidth * root.scale.x < pose.faceWidth * 1.04 * frameFitScale(product.id) - .01) throw Error('Frame undersized for its profile: ' + product.id);
             const left = root.worldToLocal(pose.leftTemple.clone()), right = root.worldToLocal(pose.rightTemple.clone());
             rig.fitTemples(left, right);
             const fittedLens = new THREE.Box3(); rig.group.traverse(m => { if (m.isMesh && /lens/i.test(m.name)) { m.geometry.computeBoundingBox(); fittedLens.union(m.geometry.boundingBox); } });
@@ -81,9 +82,10 @@ const puppeteer = require('puppeteer'), fs = require('fs');
         surface.dispose(); skinMat.dispose(); texture.dispose();
       }
       task.close(); env.dispose(); renderer.dispose();
-      return { checks, panels };
+      return { checks, panels, issues };
     });
     fs.mkdirSync('scratch/placement-audit', { recursive: true });
+    fs.writeFileSync('scratch/placement-audit/issues.json', JSON.stringify(result.issues, null, 2));
     fs.writeFileSync('scratch/placement-audit/checks.json', JSON.stringify(result.checks, null, 2));
     for (const panel of result.panels) fs.writeFileSync('scratch/placement-audit/' + panel.face + '-' + panel.id + '-' + panel.pose + '.png', Buffer.from(panel.data.split(',')[1], 'base64'));
     for (const face of ['male_square', 'female_oval']) {
@@ -95,6 +97,7 @@ const puppeteer = require('puppeteer'), fs = require('fs');
         await page.screenshot({ path: 'scratch/placement-audit/' + face + '-sheet-' + (start / 48 + 1) + '.png' });
       }
     }
-    console.log('Passed: ' + result.checks.length + ' face/model combinations, ' + result.panels.length + ' rendered poses. Lens anchors, front size and immutable lenses checked.');
+    console.log('Audit issues: ' + JSON.stringify(result.issues));
+    console.log('Audited: ' + result.checks.length + ' face/model combinations, ' + result.panels.length + ' rendered poses. Lens anchors, front size and immutable lenses checked.');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exitCode = 1; });

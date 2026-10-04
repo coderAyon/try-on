@@ -35,6 +35,10 @@ export async function openTryOnCamera(cancelled: () => boolean): Promise<MediaSt
 
 export function cameraErrorMessage(error: unknown): string {
   const name = error instanceof Error ? error.name : '';
+  const message = error instanceof Error ? error.message : String(error || '');
+  if (message.includes('noExitRuntime') || message.includes('Module.')) {
+    return 'Face tracking engine refreshed. Click "Retry camera" to start streaming.';
+  }
   if (name === 'NotReadableError' || name === 'AbortError') return 'The camera could not start. Close other tabs or apps using your camera, then retry. If it stays unavailable, check your device camera settings.';
   if (name === 'NotAllowedError' || name === 'SecurityError') return 'Camera access is blocked. Allow camera access in your browser site settings and device privacy settings, then retry.';
   if (name === 'NotFoundError') return 'No available camera was found. Connect or enable your camera, then retry.';

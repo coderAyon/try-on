@@ -23,6 +23,7 @@ export const MODEL_TEMPLE_WIDTH = 8.8;
  * Map product category or ID to model path in public/models/
  */
 function getModelPath(product: SunglassesProduct): string {
+  if (product.id === 'versace-ve4514d' || product.category === 'Versace') return '/models/versace_ve4514d.glb';
   if (product.category === 'Wayfarer') return '/models/jeeliz/frames.json';
   if (product.category === 'Hexagonal') return '/models/hexagonal/scene.gltf';
   if (product.category === 'Prada') return '/models/prada_silver.glb';
@@ -36,6 +37,7 @@ function isLensMesh(mesh: THREE.Mesh, product: SunglassesProduct): boolean {
   const node = mesh.name.toLowerCase();
   const material = (Array.isArray(mesh.material) ? mesh.material : [mesh.material]).map(m => m.name.toLowerCase()).join(' ');
   const explicit: Record<string, string[]> = {
+    Versace: ['versace_lens_left', 'versace_lens_right'],
     Prada: ['obj26_mat3_0', 'obj27_mat3_0', 'obj28_mat4_0'],
     RayBanNew: ['obj9_mat2_0', 'obj10_mat2_0', 'obj11_mat3_0', 'obj12_mat4_0'],
     Matsuda: ['object_14'],
@@ -233,6 +235,16 @@ function applyPBRMaterials(
     envMapIntensity: 3.5,
   });
 
+  // 6b. Authentic Polished Yellow Gold Hardware (Versace Medusa Medallion & Temple Inscription)
+  const goldHardwareMaterial = new THREE.MeshPhysicalMaterial({
+    color: new THREE.Color('#D4AF37'),
+    metalness: 0.96,
+    roughness: 0.16,
+    clearcoat: 0.8,
+    clearcoatRoughness: 0.05,
+    reflectivity: 0.95,
+  });
+
   // 7. Anatomical Contact Drop-Shadow beneath bridge and nose pads
   if (!root.getObjectByName('contact-shadow')) {
     const shadowCanvas = document.createElement('canvas');
@@ -304,13 +316,24 @@ function applyPBRMaterials(
         origMatName.includes('silver') ||
         nodeName.includes('rivet') ||
         nodeName.includes('stud') ||
-        nodeName.includes('hinge');
+        (nodeName.includes('hinge') && !nodeName.includes('gold'));
+
+      // Gold hardware (Versace Medusa medallion, gold hinges, gold inscriptions)
+      const isGoldHardware =
+        origMatName.includes('gold') ||
+        nodeName.includes('medusa') ||
+        nodeName.includes('logo') ||
+        nodeName.includes('coin') ||
+        nodeName.includes('gold');
 
       if (isLens) {
         mesh.userData.eyewearLens = true;
         if (!/lens/i.test(mesh.name)) mesh.name += '-lens';
         mesh.material = lensMaterial;
         mesh.renderOrder = 3; // Renders glass with physical transmission
+      } else if (isGoldHardware) {
+        mesh.material = goldHardwareMaterial;
+        mesh.renderOrder = 2;
       } else if (isNosePad) {
         mesh.material = nosePadMaterial;
         mesh.renderOrder = 2;

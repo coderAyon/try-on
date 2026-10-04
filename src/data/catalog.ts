@@ -288,6 +288,54 @@ export const SUNGLASSES_CATALOG: SunglassesProduct[] = [
     ],
     pbr: { frameMetalness: 0.1, frameRoughness: 0.3, lensTransmission: 0.8, lensRoughness: 0.05, lensIor: 1.5, lensReflectivity: 0.9 },
     svgPreview: 'wayfarer'
+  },
+  {
+    id: 'versace-ve4514d',
+    name: 'VE4514D Medusa',
+    brand: 'Versace',
+    modelCode: 'VE4514D M 53-17 145 GB1/87',
+    category: 'Versace',
+    price: 345,
+    badge: 'Iconic Luxury',
+    description: 'Distinctive softened rectangular sunglasses in polished black Italian acetate, detailed with signature gold Medusa medallion coins on the hinge lugs and gold Versace lettering.',
+    frameMaterial: 'Hand-Polished Black Italian Acetate',
+    polarized: false,
+    uvProtection: 'UV400 100%',
+    suitableFaceShapes: ['Oval', 'Round', 'Heart', 'Diamond'],
+    dimensions: { lensWidth: 53, bridgeWidth: 17, templeLength: 145 },
+    thumbnailUrl: '/models/catalog-thumbnails/versace-ve4514d.png',
+    model: {
+      path: '/models/versace_ve4514d.glb',
+      scaleMultiplier: 1.0,
+      offsetY: 0.0,
+      offsetZ: 0.0,
+    },
+    activeVariantIndex: 0,
+    variants: [
+      {
+        name: 'Black Acetate / Dark Grey & Gold Medusa',
+        frameHex: '#0c0d0f',
+        lensHex: '#1d2124',
+        metalness: 0.02,
+        roughness: 0.08,
+      },
+      {
+        name: 'Dark Havana / Warm Brown & Gold Medusa',
+        frameHex: '#382013',
+        lensHex: '#452814',
+        metalness: 0.02,
+        roughness: 0.10,
+      },
+    ],
+    pbr: {
+      frameMetalness: 0.02,
+      frameRoughness: 0.08,
+      lensTransmission: 0.15,
+      lensRoughness: 0.02,
+      lensIor: 1.52,
+      lensReflectivity: 0.95,
+    },
+    svgPreview: 'wayfarer',
   }
 ];
 

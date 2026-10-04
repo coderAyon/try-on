@@ -25,7 +25,7 @@ export const SnapshotPreviewModal: React.FC<SnapshotPreviewModalProps> = ({
       particleCount: 60,
       spread: 70,
       origin: { y: 0.6 },
-      colors: ['#D4AF37', '#F5E6CA', '#FFFFFF', '#C5A880'],
+      colors: ['#7c3aed', '#a855f7', '#d8b4fe', '#ffffff', '#D4AF37'],
     });
 
     const link = document.createElement('a');
@@ -103,7 +103,7 @@ export const SnapshotPreviewModal: React.FC<SnapshotPreviewModalProps> = ({
 
             <button
               onClick={handleDownload}
-              className="flex-1 sm:flex-initial flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-luxury-gold hover:bg-luxury-gold-dark text-luxury-950 text-xs font-bold font-mono tracking-wider shadow-gold-glow transition-all"
+              className="flex-1 sm:flex-initial flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-[#7c3aed] to-[#6d28d9] hover:from-[#8b5cf6] hover:to-[#7c3aed] text-white text-xs font-bold font-mono tracking-wider shadow-lg shadow-violet-500/35 transition-all cursor-pointer border border-white/20"
             >
               <Download className="w-4 h-4" />
               <span>Save Image</span>

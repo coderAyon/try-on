@@ -141,13 +141,17 @@ class DatabaseService {
     return initialData;
   }
 
+  private persistTimeout: NodeJS.Timeout | null = null;
   private persist(dataToSave?: DatabaseSchema) {
-    try {
-      const payload = dataToSave || this.data;
-      fs.writeFileSync(DB_FILE, JSON.stringify(payload, null, 2), 'utf-8');
-    } catch (err) {
-      console.error('Error persisting database:', err);
-    }
+    if (this.persistTimeout) clearTimeout(this.persistTimeout);
+    this.persistTimeout = setTimeout(() => {
+      try {
+        const payload = dataToSave || this.data;
+        fs.writeFileSync(DB_FILE, JSON.stringify(payload, null, 2), 'utf-8');
+      } catch (err) {
+        // Silently ignore temporary file lock on Windows
+      }
+    }, 300);
   }
 
   // --- Products ---

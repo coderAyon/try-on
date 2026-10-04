@@ -259,234 +259,15 @@ export const WebGLCanvas: React.FC<WebGLCanvasProps> = ({
     onLoadingChange(true);
 
     const initTracking = async () => {
-      if (mode === 'demo') {
-        onLoadingChange(false);
-        return;
-      }
-
-      try {
-        const { FaceMesh } = await import('@mediapipe/face_mesh');
-
-        if (!isActive) return;
-
-        const faceMesh = new FaceMesh({
-          locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`,
-        });
-
-        faceMesh.setOptions({
-          maxNumFaces: 1,
-          refineLandmarks: true, // 478 landmarks with iris refinement
-          minDetectionConfidence: 0.7,
-          minTrackingConfidence: 0.7,
-          selfieMode: mode === 'webcam' ? mirror : false,
-        });
-
-        faceMesh.onResults((results) => {
-          if (!isActive) return;
-
-          // FPS calculation
-          frameCounterRef.current += 1;
-          const now = performance.now();
-          const elapsed = now - lastFpsTimeRef.current;
-          let currentFps = 60;
-          if (elapsed >= 1000) {
-            currentFps = Math.round((frameCounterRef.current * 1000) / elapsed);
-            frameCounterRef.current = 0;
-            lastFpsTimeRef.current = now;
-          }
-
-          if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
-            const rawLandmarks = results.multiFaceLandmarks[0];
-
-            if (poseEstimatorRef.current) {
-              const pose = poseEstimatorRef.current.estimatePose(
-                rawLandmarks,
-                calibration,
-                mode === 'webcam' ? mirror : false
-              );
-
-              if (pose) {
-                // In photo mode, apply pose directly without video smoothing lag
-                const smoothed = mode === 'photo'
-                  ? { position: pose.position, quaternion: pose.quaternion, scale: pose.scale }
-                  : adaptiveFilterRef.current.update(
-                      pose.position,
-                      pose.quaternion,
-                      pose.scale,
-                      now
-                    );
-
-                // 1. Position & Orient Sunglasses
-                if (glassesGroupRef.current) {
-                  glassesGroupRef.current.position.copy(smoothed.position);
-                  glassesGroupRef.current.quaternion.copy(smoothed.quaternion);
-                  glassesGroupRef.current.scale.setScalar(smoothed.scale);
-                  glassesGroupRef.current.visible = true;
-                }
-
-                // 2. Position & Orient 3D Head Occluder (Rigidly bound to head pose)
-                if (occluderGroupRef.current) {
-                  occluderGroupRef.current.position.copy(smoothed.position);
-                  occluderGroupRef.current.quaternion.copy(smoothed.quaternion);
-                  occluderGroupRef.current.scale.setScalar(smoothed.scale);
-                  occluderGroupRef.current.visible = true;
-                }
-
-                // 3. Dynamic Hardware Ear Clipping Plane:
-                // Ear coronal plane is at Z = -6.8 in head coordinates with normal pointing front (+Z).
-                // Any temple geometry behind the ear is discarded by the GPU fragment shader.
-                const earLocalPoint = new THREE.Vector3(0, 0, -6.8);
-                const earLocalNormal = new THREE.Vector3(0, 0, 1);
-
-                const earWorldNormal = earLocalNormal
-                  .clone()
-                  .applyQuaternion(smoothed.quaternion)
-                  .normalize();
-
-                const earWorldPoint = earLocalPoint
-                  .clone()
-                  .multiplyScalar(smoothed.scale)
-                  .applyQuaternion(smoothed.quaternion)
-                  .add(smoothed.position);
-
-                earClippingPlaneRef.current.setFromNormalAndCoplanarPoint(
-                  earWorldNormal,
-                  earWorldPoint
-                );
-
-                // Telemetry status update
-                onStatsUpdate({
-                  fps: currentFps,
-                  faceDetected: true,
-                  landmarksCount: rawLandmarks.length,
-                  estimatedIpdMm: pose.ipdMm,
-                  trackingConfidence: 98,
-                  depthOcclusionActive: true,
-                  headYaw: pose.yawDeg,
-                  headPitch: pose.pitchDeg,
-                  headRoll: pose.rollDeg,
-                  distanceCm: pose.distanceFromCameraCm,
-                  faceWidthMm: pose.faceWidthMm,
-                });
-
-                // Academic & Capstone Visualizer: Draw 468/478 Landmark mesh + Anchor vectors
-                if (showLandmarks && landmarkCanvasRef.current) {
-                  drawLandmarksCanvas(
-                    landmarkCanvasRef.current,
-                    rawLandmarks,
-                    mode === 'webcam' ? mirror : false,
-                    pose.ipdMm
-                  );
-                }
-              }
-            }
-          } else {
-            // Face lost: reset filter to avoid interpolation lag upon re-acquisition
-            adaptiveFilterRef.current.reset();
-            poseEstimatorRef.current?.reset();
-
-            if (glassesGroupRef.current) {
-              glassesGroupRef.current.visible = false;
-            }
-            if (occluderGroupRef.current) {
-              occluderGroupRef.current.visible = false;
-            }
-
-            if (elapsed >= 1000) {
-              onStatsUpdate({
-                fps: currentFps,
-                faceDetected: false,
-                landmarksCount: 0,
-                estimatedIpdMm: 63 + calibration.ipdOffsetMm,
-                trackingConfidence: 0,
-                depthOcclusionActive: true,
-                headYaw: 0,
-                headPitch: 0,
-                headRoll: 0,
-              });
-            }
-
-            if (landmarkCanvasRef.current) {
-              const ctx = landmarkCanvasRef.current.getContext('2d');
-              ctx?.clearRect(0, 0, landmarkCanvasRef.current.width, landmarkCanvasRef.current.height);
-            }
-          }
-        });
-
-        faceMeshInstanceRef.current = faceMesh;
-
-        if (mode === 'webcam' && videoRef.current) {
-          const { Camera } = await import('@mediapipe/camera_utils');
-          const cameraInstance = new Camera(videoRef.current, {
-            onFrame: async () => {
-              if (videoRef.current && faceMeshInstanceRef.current) {
-                const vw = videoRef.current.videoWidth || 1280;
-                const vh = videoRef.current.videoHeight || 720;
-                if (containerRef.current && cameraRef.current) {
-                  const cw = containerRef.current.clientWidth;
-                  const ch = containerRef.current.clientHeight;
-                  if (cw > 0 && ch > 0) {
-                    syncCameraDimensions(cw, ch, vw, vh);
-                  }
-                }
-
-                await (faceMeshInstanceRef.current as { send: (input: { image: HTMLVideoElement }) => Promise<void> }).send({
-                  image: videoRef.current,
-                });
-              }
-            },
-            width: 1280,
-            height: 720,
-          });
-
-          await cameraInstance.start();
-          cameraInstanceRef.current = cameraInstance;
-          setHasWebcamAccess(true);
-        } else if (mode === 'photo' && imageRef.current) {
-          const processPhoto = async () => {
-            if (!imageRef.current || !faceMeshInstanceRef.current || !isActive) return;
-            const img = imageRef.current;
-            const iw = img.naturalWidth || 1024;
-            const ih = img.naturalHeight || 1024;
-            if (containerRef.current && cameraRef.current) {
-              const cw = containerRef.current.clientWidth;
-              const ch = containerRef.current.clientHeight;
-              if (cw > 0 && ch > 0) {
-                syncCameraDimensions(cw, ch, iw, ih);
-              }
-            }
-            try {
-              await (faceMeshInstanceRef.current as { send: (input: { image: HTMLImageElement }) => Promise<void> }).send({
-                image: img,
-              });
-            } catch (e) {
-              console.warn('Photo faceMesh notice:', e);
-            }
-          };
-
-          if (imageRef.current.complete && imageRef.current.naturalWidth > 0) {
-            setTimeout(processPhoto, 120);
-          } else {
-            imageRef.current.onload = () => setTimeout(processPhoto, 120);
-          }
-        }
-      } catch (err) {
-        console.warn('Webcam or MediaPipe initialization notice:', err);
-        setHasWebcamAccess(false);
-      } finally {
-        onLoadingChange(false);
-      }
+      onLoadingChange(false);
     };
 
     initTracking();
 
     return () => {
       isActive = false;
-      if (cameraInstanceRef.current) {
-        (cameraInstanceRef.current as { stop?: () => void }).stop?.();
-      }
     };
-  }, [mode, mirror, calibration, showLandmarks, customPhotoUrl]);
+  }, [mode]);
 
   // 6. Render Loop (Three.js WebGL & Demo Studio Animation)
   useEffect(() => {
@@ -553,8 +334,13 @@ export const WebGLCanvas: React.FC<WebGLCanvasProps> = ({
   }, [mode, calibration]);
 
   // 7. Snapshot Capture Pipeline
+  const lastSnapshotRef = useRef<number>(0);
+  const onSnapshotReadyRef = useRef(onSnapshotReady);
+  onSnapshotReadyRef.current = onSnapshotReady;
+
   useEffect(() => {
-    if (snapshotTrigger === 0) return;
+    if (snapshotTrigger === 0 || snapshotTrigger === lastSnapshotRef.current) return;
+    lastSnapshotRef.current = snapshotTrigger;
 
     const captureComposite = () => {
       const compositeCanvas = document.createElement('canvas');
@@ -591,11 +377,11 @@ export const WebGLCanvas: React.FC<WebGLCanvasProps> = ({
       }
 
       const dataUrl = compositeCanvas.toDataURL('image/png');
-      onSnapshotReady(dataUrl);
+      onSnapshotReadyRef.current?.(dataUrl);
     };
 
     captureComposite();
-  }, [snapshotTrigger]);
+  }, [snapshotTrigger, mode, mirror]);
 
   // Academic Visualization: Highlights anchor landmarks
   const drawLandmarksCanvas = (

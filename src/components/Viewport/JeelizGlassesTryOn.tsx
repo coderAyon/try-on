@@ -581,8 +581,13 @@ export const JeelizGlassesTryOn: React.FC<JeelizGlassesTryOnProps> = ({
   );
 
   // Snapshot trigger
+  const lastSnapshotRef = useRef<number>(0);
+  const onSnapshotReadyRef = useRef(onSnapshotReady);
+  onSnapshotReadyRef.current = onSnapshotReady;
+
   useEffect(() => {
-    if (snapshotTrigger === 0) return;
+    if (snapshotTrigger === 0 || snapshotTrigger === lastSnapshotRef.current) return;
+    lastSnapshotRef.current = snapshotTrigger;
     const capture = () => {
       const compositeCanvas = document.createElement('canvas');
       const w = 1280;
@@ -599,10 +604,10 @@ export const JeelizGlassesTryOn: React.FC<JeelizGlassesTryOnProps> = ({
       if (threeCanvasRef.current) {
         ctx.drawImage(threeCanvasRef.current, 0, 0, w, h);
       }
-      onSnapshotReady?.(compositeCanvas.toDataURL('image/png'));
+      onSnapshotReadyRef.current?.(compositeCanvas.toDataURL('image/png'));
     };
     capture();
-  }, [snapshotTrigger, onSnapshotReady, mirror]);
+  }, [snapshotTrigger, mirror]);
 
   return (
     <div

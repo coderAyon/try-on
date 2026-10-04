@@ -17,4 +17,36 @@ router.post('/enhance', async (req, res) => {
     res.json({ image: `data:image/png;base64,${data.data[0].b64_json}` });
   } catch { res.status(502).json({ error: 'AI enhancement timed out or could not connect. Your fitted image is still available.' }); }
 });
+router.get('/proxy', async (req, res) => {
+  const imageUrl = req.query.url;
+  if (!imageUrl || typeof imageUrl !== 'string') {
+    res.status(400).json({ error: 'URL query parameter is required.' });
+    return;
+  }
+  try {
+    const parsed = new URL(imageUrl);
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      res.status(400).json({ error: 'Only HTTP/HTTPS URLs allowed.' });
+      return;
+    }
+    const response = await fetch(parsed.href, {
+      signal: AbortSignal.timeout(15000),
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+      },
+    });
+    if (!response.ok) {
+      res.status(response.status).json({ error: `Remote image returned HTTP status ${response.status}` });
+      return;
+    }
+    const contentType = response.headers.get('content-type') || 'image/jpeg';
+    res.setHeader('Content-Type', contentType);
+    const arrayBuffer = await response.arrayBuffer();
+    res.send(Buffer.from(arrayBuffer));
+  } catch (err: any) {
+    res.status(502).json({ error: 'Could not retrieve remote image: ' + (err.message || 'Network error') });
+  }
+});
+
 export default router;

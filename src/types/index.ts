@@ -1,6 +1,6 @@
 export type FaceShape = 'Oval' | 'Round' | 'Square' | 'Heart' | 'Diamond';
 
-export type EyewearCategory = 'All' | 'Aviator' | 'Wayfarer' | 'Sport' | 'Hexagonal' | 'Round' | 'Cat-Eye' | 'Prada' | 'Matsuda' | 'RayBanNew';
+export type EyewearCategory = 'All' | 'Aviator' | 'Wayfarer' | 'Sport' | 'Hexagonal' | 'Round' | 'Cat-Eye' | 'Prada' | 'Matsuda' | 'RayBanNew' | 'Versace';
 
 export interface ColorVariant {
   name: string;
@@ -25,6 +25,9 @@ export interface SunglassesProduct {
     trimLensToAnchor?: boolean;
     localGeometry?: boolean;
     excludeNodes?: string[];
+    scaleMultiplier?: number;
+    offsetY?: number;
+    offsetZ?: number;
   };
   category: EyewearCategory;
   price: number;
@@ -62,6 +65,10 @@ export interface FaceMeasurements {
   heightToWidth: number;
   jawToCheek: number;
   foreheadToCheek: number;
+  foreheadToJaw?: number;
+  shape?: FaceShape;
+  confidence?: number;
+  scores?: Record<FaceShape, number>;
   samples: number;
   measuredAt: number;
 }

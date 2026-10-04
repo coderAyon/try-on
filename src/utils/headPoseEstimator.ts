@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { NormalizedLandmark } from '@mediapipe/face_mesh';
+import type { NormalizedLandmark } from '@mediapipe/face_mesh';
 import { CalibrationSettings } from '../types';
 
 export interface HeadPoseResult {
@@ -309,7 +309,7 @@ export class HeadPoseEstimator {
     const glassesAnchor = bridgePos.clone();
 
     // Subtle offset along face local Y axis (Vertical offset calibration)
-    const verticalOffset = -0.01 * worldEyeDistance + calibration.verticalOffsetMm * 0.04;
+    const verticalOffset = 0.025 * worldEyeDistance + calibration.verticalOffsetMm * 0.04;
     glassesAnchor.addScaledVector(this.basisY, verticalOffset);
 
     // Forward clearance along face local Z axis (Corneal clearance: rests right on bridge skin)

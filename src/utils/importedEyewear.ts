@@ -110,11 +110,14 @@ async function normalize(spec: ModelSpec): Promise<THREE.Group> {
   // This OBJ has downward ear hooks. Fit the straight arm's contact section,
   // rather than lifting the whole arm until the bottom of its hook reaches the ear.
   if (spec.path.endsWith('/Glasses.obj')) output.userData.templeContactFraction = .8;
-  const scale = 8.8 / size.x;
+  const scale = (8.8 / size.x) * (spec.scaleMultiplier ?? 1.0);
   // Bake the orientation, scale and lens origin once. Live tracking is unchanged.
   baked.children.forEach(object => {
     const mesh = object as THREE.Mesh;
     mesh.geometry.applyMatrix4(mesh.matrixWorld).translate(-centre.x, -centre.y, -centre.z).scale(scale, scale, scale);
+    if (spec.offsetY || spec.offsetZ) {
+      mesh.geometry.translate(0, spec.offsetY ?? 0, spec.offsetZ ?? 0);
+    }
     mesh.position.set(0, 0, 0); mesh.rotation.set(0, 0, 0); mesh.scale.set(1, 1, 1);
   });
   while (baked.children.length) output.add(baked.children[0]);

@@ -10,6 +10,25 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700;800&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <script>
+      (function() {
+        try {
+          var _mod = window.Module;
+          Object.defineProperty(window, 'Module', {
+            configurable: true,
+            enumerable: true,
+            get: function() { return _mod; },
+            set: function(val) {
+              if (val && typeof val === 'object') {
+                try { delete val.noExitRuntime; } catch(e){}
+                try { val.noExitRuntime = true; } catch(e){}
+              }
+              _mod = val;
+            }
+          });
+        } catch(e) {}
+      })();
+    </script>
   </head>
   <body class="bg-luxury-950 text-slate-100 antialiased selection:bg-luxury-gold selection:text-luxury-950 overflow-x-hidden min-h-screen">
     <div id="root"></div>
