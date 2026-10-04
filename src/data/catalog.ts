@@ -1,5 +1,5 @@
 import { SunglassesProduct, LightingConfig } from '../types';
-import { createImportedCatalog } from './importedCatalog';
+import { createImportedCatalog } from './importedCatalog.js';
 
 export const SUNGLASSES_CATALOG: SunglassesProduct[] = [
   {
