@@ -57,6 +57,8 @@ export class StableEyewearPose {
   private span = 0;
   private frontalSpan: number | null = null;
   private velocity = new THREE.Vector3();
+  private angularDirection = new THREE.Vector3();
+  private coherentAngularSamples = 0;
   private bridge: THREE.Vector3 | null = null;
   private previousBridge = new THREE.Vector3();
   private bridgeVelocity = new THREE.Vector3();
@@ -70,6 +72,8 @@ export class StableEyewearPose {
     this.bridge = null;
     this.time = 0;
     this.velocity.set(0, 0, 0);
+    this.angularDirection.set(0, 0, 0);
+    this.coherentAngularSamples = 0;
     this.bridgeVelocity.set(0, 0, 0);
     this.spanVelocity = 0;
     this.frontalSpan = null;
@@ -90,6 +94,8 @@ export class StableEyewearPose {
       this.bridge = pose.bridge.clone();
       this.previousBridge.copy(pose.bridge);
       this.velocity.set(0, 0, 0);
+      this.angularDirection.set(0, 0, 0);
+      this.coherentAngularSamples = 0;
       this.bridgeVelocity.set(0, 0, 0);
       this.spanVelocity = 0;
     } else {
@@ -100,10 +106,16 @@ export class StableEyewearPose {
       const length = derivative.length();
       if (length > 1e-8) derivative.multiplyScalar(2 * Math.atan2(length, delta.w) / (length * dt));
 
+      this.coherentAngularSamples = derivative.dot(this.angularDirection) > 0
+        ? this.coherentAngularSamples + 1 : 0;
+      this.angularDirection.copy(derivative);
       this.velocity.lerp(derivative, alpha(3));
       const rotSpeed = this.velocity.length();
       // Responsive cutoff: adapts smoothly to speed so turns follow immediately with zero lag
-      const rotCutoff = 1.2 + Math.max(0, rotSpeed - 0.03) * 18 + Math.min(12, rotSpeed * 35);
+      // Alternating small detector errors must not open the movement filter.
+      // Coherent turns and larger movements retain the existing fast response.
+      const stationaryRotation = this.coherentAngularSamples < 2 && this.rotation.angleTo(pose.quaternion) < .045;
+      const rotCutoff = stationaryRotation ? 1.2 : 1.2 + Math.max(0, rotSpeed - 0.03) * 18 + Math.min(12, rotSpeed * 35);
       this.rotation.slerp(pose.quaternion, alpha(rotCutoff));
       this.localAnchor.lerp(offset, alpha(0.8));
 
@@ -129,7 +141,8 @@ export class StableEyewearPose {
       this.bridgeVelocity.lerp(bridgeDerivative, alpha(3));
       const speed = this.bridgeVelocity.length();
       const displacement = this.bridge!.distanceTo(pose.bridge) / Math.max(8, pose.eyeSpan);
-      const posCutoff = 1.4 + Math.max(0, speed - 0.02) * 22 + Math.max(0, displacement - 0.01) * 120;
+      const posCutoff = displacement < .015 ? 1.4
+        : 1.4 + Math.max(0, speed - 0.02) * 22 + Math.max(0, displacement - 0.01) * 120;
       this.bridge!.lerp(pose.bridge, alpha(posCutoff));
     }
 

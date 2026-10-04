@@ -47,7 +47,10 @@ const puppeteer = require('puppeteer'), fs = require('fs');
           const lens = new THREE.Box3(); rig.group.traverse(m => { if (m.isMesh && /lens/i.test(m.name)) lens.union(new THREE.Box3().setFromObject(m, true)); });
           const centre = lens.isEmpty() ? null : lens.getCenter(new THREE.Vector3()).toArray();
           // Procedural convex lenses intentionally extend 0.32 units forward.
-          if (centre && (Math.abs(centre[0]) > .08 || Math.abs(centre[1]) > .08 || Math.abs(centre[2]) > .2)) issues.push({ id: product.id, face, issue: 'Lens anchor offset', centre });
+          // Imported models deliberately shift their optical origin for brow fit.
+          // Check the residual from that declared correction, not absolute zero.
+          const expectedCentre = [0, product.model?.offsetY ?? 0, product.model?.offsetZ ?? 0];
+          if (centre && (Math.abs(centre[0]) > .08 || Math.abs(centre[1] - expectedCentre[1]) > .08 || Math.abs(centre[2] - expectedCentre[2]) > .2)) issues.push({ id: product.id, face, issue: 'Lens anchor offset', centre, expectedCentre });
           let innerEdge = Infinity;
           rig.group.traverse(m => { if (m.isMesh && /lens/i.test(m.name)) { const p = m.geometry.attributes.position; for (let i = 0; i < p.count; i++) innerEdge = Math.min(innerEdge, Math.abs(p.getX(i))); } });
           const gapRatio = Number.isFinite(innerEdge) && innerEdge > .05 ? 2 * innerEdge / rig.eyeDistance : null;
@@ -98,6 +101,7 @@ const puppeteer = require('puppeteer'), fs = require('fs');
       }
     }
     console.log('Audit issues: ' + JSON.stringify(result.issues));
+    if (result.issues.length) process.exitCode = 1;
     console.log('Audited: ' + result.checks.length + ' face/model combinations, ' + result.panels.length + ' rendered poses. Lens anchors, front size and immutable lenses checked.');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exitCode = 1; });

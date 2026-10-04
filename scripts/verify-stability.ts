@@ -20,6 +20,29 @@ assert(filteredJitter < rawJitter*.2,'Rotation jitter reduction insufficient');
 assert(filteredPosition < rawPosition*.5,'Anchor jitter reduction insufficient');
 assert(filteredBridgeNoise<rawBridgeNoise*.15,'Stationary bridge noise insufficiently suppressed');
 assert(filteredScaleNoise<rawScaleNoise*.15,'Stationary scale noise insufficiently suppressed');
+// Reversing detector noise must stay suppressed at different camera rates.
+for (const fps of [20, 30, 60]) {
+ stable.reset(); stable.update(make(new THREE.Quaternion()), 0);
+ let rawEnergy = 0, fittedEnergy = 0;
+ for (let i = 1; i < fps * 6; i++) {
+  const noise = Math.sin(i * 2.1) * .025;
+  const raw = make(new THREE.Quaternion().setFromEuler(new THREE.Euler(noise, noise * .5, noise)));
+  const fitted = stable.update(raw, i * 1000 / fps);
+  if (i > fps) {
+   rawEnergy += raw.quaternion.angleTo(new THREE.Quaternion()) ** 2;
+   fittedEnergy += fitted.quaternion.angleTo(new THREE.Quaternion()) ** 2;
+  }
+ }
+ assert(fittedEnergy < rawEnergy * .2, `Stationary rotation noise at ${fps} fps`);
+ // Small intentional turns must still open the adaptive filter.
+ stable.reset(); let lag = 0;
+ for (let i = 0; i < fps * 4; i++) {
+  const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, .08 * Math.sin(i / fps * 2), 0));
+  const fitted = stable.update(make(q), i * 1000 / fps);
+  lag = Math.max(lag, fitted.quaternion.angleTo(q) * 180 / Math.PI);
+ }
+ assert(lag < 3, `Small intentional turn lag at ${fps} fps`);
+}
 stable.reset();let maxLag=0,maxAnchorError=0;
 const anchor=new THREE.Vector3(0,-.05,.025);
 for(let i=0;i<180;i++){
