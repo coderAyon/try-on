@@ -14,7 +14,9 @@ export async function openTryOnCamera(cancelled: () => boolean): Promise<MediaSt
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: attempt === 0 ? { facingMode: 'user', width: { ideal: mobile ? 1280 : 1920 }, height: { ideal: mobile ? 720 : 1080 }, frameRate: { ideal: 60, max: 60 } }
+          // Keep the inference input at 720p. 1080p adds camera and copy cost
+          // without improving MediaPipe's landmark precision for this overlay.
+          video: attempt === 0 ? { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 60, max: 60 } }
             : true,
           audio: false,
         });

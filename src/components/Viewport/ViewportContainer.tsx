@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   SunglassesProduct,
   TrackingStats,
@@ -13,16 +13,8 @@ import { AcademicCVModal } from '../Controls/AcademicCVModal';
 import {
   Camera,
   FlipHorizontal,
-  SunMedium,
-  Cpu,
-  Columns,
-  Sparkles,
   RotateCw,
-  Box,
-  Image as ImageIcon,
-  Check,
 } from 'lucide-react';
-import { LIGHTING_PRESETS } from '../../data/catalog';
 import { soundEffects } from '../../utils/audio';
 
 interface ViewportContainerProps {
@@ -53,8 +45,11 @@ interface ViewportContainerProps {
 }
 
 export const ViewportContainer: React.FC<ViewportContainerProps> = ({
-  cameraSession, onCameraStateChange,
-  cameraEnabled, onEnableCamera, onStopCamera,
+  cameraSession,
+  onCameraStateChange,
+  cameraEnabled,
+  onEnableCamera,
+  onStopCamera,
   product,
   variantIndex,
   mode,
@@ -86,9 +81,6 @@ export const ViewportContainer: React.FC<ViewportContainerProps> = ({
   const [isDraggingSplit, setIsDraggingSplit] = useState<boolean>(false);
   const mirrorContainerRef = useRef<HTMLDivElement>(null);
 
-  const activeVariant = product.variants[variantIndex || 0] || product.variants[0];
-
-  // Drag handler for Split-Screen Slider
   const handleSplitPointerDown = (e: React.PointerEvent) => {
     setIsDraggingSplit(true);
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
@@ -111,61 +103,32 @@ export const ViewportContainer: React.FC<ViewportContainerProps> = ({
     }
   };
 
+  const handleSwitchCameraClick = () => {
+    soundEffects.playClick();
+    if (!cameraEnabled) {
+      onEnableCamera();
+    } else {
+      // Toggle mirror or camera session
+      onToggleMirror();
+    }
+  };
+
+  const handleSnapshotClick = () => {
+    soundEffects.playShutter();
+    onCaptureSnapshot();
+  };
+
   return (
-    <div className="w-full flex flex-col gap-3 select-none">
-      {/* 1. Mode Switcher Segmented Tabs (FittingBox standard) */}
-      <div className="flex items-center justify-between gap-2 px-1">
-        <div className="inline-flex p-1 bg-white/90 backdrop-blur-md border border-[#d8b4fe] rounded-2xl shadow-sm">
-          <button
-            onClick={() => {
-              soundEffects.playClick();
-              onModeChange('webcam');
-            }}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold tracking-wide transition-all cursor-pointer ${
-              mode === 'webcam'
-                ? 'bg-gradient-to-r from-[#6d28d9] to-[#7c3aed] text-white shadow-md shadow-violet-500/25'
-                : 'text-[#6d5b83] hover:text-[#4c1d95] hover:bg-[#ede0fc]'
-            }`}
-          >
-            <Camera className="w-3.5 h-3.5" />
-            <span>Try on</span>
-            {stats.faceDetected && mode === 'webcam' && (
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_8px_#34d399]" />
-            )}
-          </button>
-
-          <button
-            onClick={() => {
-              soundEffects.playClick();
-              onModeChange('photo');
-            }}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold tracking-wide transition-all cursor-pointer ${
-              mode === 'photo'
-                ? 'bg-gradient-to-r from-[#6d28d9] to-[#7c3aed] text-white shadow-md shadow-violet-500/25'
-                : 'text-[#6d5b83] hover:text-[#4c1d95] hover:bg-[#ede0fc]'
-            }`}
-          >
-            <ImageIcon className="w-3.5 h-3.5" />
-            <span>Photo</span>
-          </button>
-        </div>
-
-        {/* Live Tracking Status Badge */}
-        <div className="hidden sm:flex items-center gap-2 text-xs font-medium text-[#6d28d9] bg-white/80 border border-[#d8b4fe] px-3 py-1.5 rounded-xl shadow-sm">
-          <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_8px_#10b981]" />
-          <span>{mode === 'webcam' ? 'Live face tracking' : 'Interactive product studio'}</span>
-        </div>
-      </div>
-
-      {/* 2. Main High-Resolution Virtual Mirror Box */}
+    <div className="w-full h-full flex flex-col select-none">
+      {/* Main Reference Camera Preview Viewport */}
       <div
         ref={mirrorContainerRef}
         onPointerMove={isSplitActive ? handleSplitPointerMove : undefined}
-        className="fitting-viewport relative w-full aspect-[3/4] sm:aspect-[16/9] bg-[#120c1d] rounded-3xl overflow-hidden border-2 border-[#d8b4fe]/80 shadow-[0_20px_50px_-10px_rgba(109,40,217,0.18)] flex items-center justify-center group"
+        className="relative w-full flex-1 h-full min-h-[340px] lg:min-h-0 aspect-[16/11] lg:aspect-auto bg-[#120e22] rounded-[26px] overflow-hidden border border-[#eceaf5] shadow-[0_4px_24px_rgba(109,40,217,0.06)] flex items-center justify-center group"
       >
-        {/* Webcam mode: Jeeliz FaceFilter (6DOF, rock-solid face-locked glasses) */}
-        {mode === 'webcam' && !cameraEnabled ? <div className="fit-scan"><Camera size={32} /><h3>Your camera is off</h3><p>Allow camera access to try frames on your face. Your browser may ask for permission. You can stop the camera at any time.</p><button className="frame-capture" onClick={onEnableCamera}>Allow camera & start try-on</button></div> : mode === 'webcam' ? (
-            <LandmarkGlassesTryOn
+        {/* Real Live Camera Try-On OR Realistic Hero Portrait Fallback */}
+        {cameraEnabled && mode === 'webcam' ? (
+          <LandmarkGlassesTryOn
             key={cameraSession}
             onCameraStateChange={onCameraStateChange}
             mirror={mirror}
@@ -181,8 +144,7 @@ export const ViewportContainer: React.FC<ViewportContainerProps> = ({
             onLoadingChange={setIsLoading}
             onSwitchMode={onModeChange}
           />
-        ) : (
-          /* Demo & Photo modes: MediaPipe + Three.js WebGLCanvas */
+        ) : mode === 'photo' || mode === 'demo' ? (
           <WebGLCanvas
             product={product}
             variantIndex={variantIndex}
@@ -199,19 +161,97 @@ export const ViewportContainer: React.FC<ViewportContainerProps> = ({
             onLoadingChange={setIsLoading}
             splitPosition={isSplitActive ? splitPos : 100}
           />
+        ) : (
+          /* Live Camera Idle / Access Prompt (No static demo girl image) */
+          <div className="relative w-full h-full flex flex-col items-center justify-center text-center p-6 bg-gradient-to-b from-[#18122c] to-[#0f0b1d] text-white">
+            <div className="w-16 h-16 rounded-full bg-[#6355f6]/20 border border-[#6355f6]/40 flex items-center justify-center text-[#9387ff] mb-4 shadow-[0_0_24px_rgba(99,85,246,0.25)] animate-pulse">
+              <Camera size={30} strokeWidth={2} />
+            </div>
+            <h3 className="text-[18px] font-bold text-white mb-2 tracking-tight">Live Camera Ready</h3>
+            <p className="text-[12px] text-[#a79fc2] max-w-sm mb-5 leading-relaxed">
+              Click below to start your webcam and try on eyewear in real time with 3D face tracking.
+            </p>
+            <button
+              onClick={onEnableCamera}
+              className="flex items-center gap-2 bg-[#6355f6] hover:bg-[#5242ee] text-white px-6 py-2.5 rounded-full text-[13px] font-semibold shadow-lg shadow-[#6355f6]/35 hover:scale-105 active:scale-95 transition-all cursor-pointer"
+            >
+              <Camera size={16} />
+              <span>Allow Camera & Start Try-On</span>
+            </button>
+          </div>
         )}
 
-        {/* Viewport UI Guides & Photo Dropzone */}
-        {mode !== 'demo' && (mode !== 'webcam' || cameraEnabled) && <CameraOverlay
-          mode={mode}
-          faceDetected={stats.faceDetected}
-          onFileUpload={onFileUpload}
-          isLoading={isLoading}
-          customPhotoUrl={customPhotoUrl}
-          onSelectModel={onSelectModel}
-        />}
+        {/* Viewport UI Guides & Photo Dropzone (When in photo/custom mode) */}
+        {mode !== 'demo' && (mode !== 'webcam' || cameraEnabled) && (
+          <CameraOverlay
+            mode={mode}
+            faceDetected={stats.faceDetected}
+            onFileUpload={onFileUpload}
+            isLoading={isLoading}
+            customPhotoUrl={customPhotoUrl}
+            onSelectModel={onSelectModel}
+          />
+        )}
 
-        {/* Before / After Split Slider Divider Handle */}
+        {/* =========================================================================
+            Corner Framing Guides (White Brackets ┌  ┐  └  ┘ - Exactly as in Reference)
+            ========================================================================= */}
+        <div className="absolute top-5 left-5 w-6 h-6 border-t-2 border-l-2 border-white rounded-tl-[3px] pointer-events-none z-20 shadow-sm" />
+        <div className="absolute top-5 right-5 w-6 h-6 border-t-2 border-r-2 border-white rounded-tr-[3px] pointer-events-none z-20 shadow-sm" />
+        <div className="absolute bottom-5 left-5 w-6 h-6 border-b-2 border-l-2 border-white rounded-bl-[3px] pointer-events-none z-20 shadow-sm" />
+        <div className="absolute bottom-5 right-5 w-6 h-6 border-b-2 border-r-2 border-white rounded-br-[3px] pointer-events-none z-20 shadow-sm" />
+
+        {/* =========================================================================
+            Top Left: Status Pill ("Camera Active" with Green Pulsing Dot)
+            ========================================================================= */}
+        <div className="absolute top-4 left-4 z-20 flex items-center gap-2 bg-white/90 backdrop-blur-md px-3.5 py-1.5 rounded-full shadow-sm border border-white/60">
+          <span
+            className={`w-2 h-2 rounded-full ${
+              cameraEnabled && stats.faceDetected
+                ? 'bg-[#19b985] shadow-[0_0_8px_#19b985]'
+                : cameraEnabled
+                ? 'bg-[#19b985] animate-pulse'
+                : 'bg-[#a79fc2]'
+            }`}
+          />
+          <span className="text-[11.5px] font-bold text-[#181236] tracking-tight">
+            {cameraEnabled && stats.faceDetected ? 'Face Locked' : cameraEnabled ? 'Camera Active' : 'Camera Ready'}
+          </span>
+        </div>
+
+        {/* =========================================================================
+            Top Right: HD Badge and Camera Snapshot Button
+            ========================================================================= */}
+        <div className="absolute top-4 right-4 z-20 flex items-center gap-2">
+          {/* HD Indicator Badge */}
+          <div className="bg-black/45 backdrop-blur-md border border-white/30 px-2.5 py-1 rounded-full text-white text-[10px] font-bold tracking-wider uppercase shadow-sm">
+            HD
+          </div>
+
+          {/* Quick Snapshot Shutter Icon Button */}
+          <button
+            onClick={handleSnapshotClick}
+            title="Take a snapshot"
+            className="w-7 h-7 rounded-full bg-black/45 backdrop-blur-md border border-white/30 text-white flex items-center justify-center hover:bg-black/70 hover:scale-105 active:scale-95 transition-all cursor-pointer shadow-sm"
+          >
+            <Camera size={14} strokeWidth={2.2} />
+          </button>
+        </div>
+
+        {/* =========================================================================
+            Bottom Center: Switch Camera Button
+            ========================================================================= */}
+        <div className="absolute bottom-4 inset-x-0 z-20 flex justify-center pointer-events-none">
+          <button
+            onClick={handleSwitchCameraClick}
+            className="pointer-events-auto flex items-center gap-2.5 bg-[#161228]/80 hover:bg-[#161228] backdrop-blur-md border border-white/25 text-white px-5 py-2.5 rounded-full text-[12px] font-semibold tracking-wide shadow-xl hover:scale-105 active:scale-95 transition-all cursor-pointer"
+          >
+            <Camera size={15} strokeWidth={2.2} />
+            <span>{cameraEnabled ? 'Switch Camera' : 'Start Camera'}</span>
+          </button>
+        </div>
+
+        {/* Before / After Split Slider Divider Handle (When Split Active) */}
         {isSplitActive && mode === 'webcam' && (
           <div
             onPointerDown={handleSplitPointerDown}
@@ -219,94 +259,20 @@ export const ViewportContainer: React.FC<ViewportContainerProps> = ({
             style={{ left: `${splitPos}%` }}
             className="absolute top-0 bottom-0 w-0.5 bg-white shadow-2xl cursor-ew-resize z-30 touch-none flex items-center justify-center -translate-x-1/2"
           >
-            {/* Upper label: Before (Left) */}
             <div className="absolute top-4 -left-16 px-2 py-0.5 rounded bg-black/80 text-[10px] font-mono uppercase tracking-widest text-neutral-300 border border-neutral-700 pointer-events-none">
               Before
             </div>
-
-            {/* Upper label: After (Right) */}
             <div className="absolute top-4 -right-16 px-2 py-0.5 rounded bg-black/80 text-[10px] font-mono uppercase tracking-widest text-neutral-300 border border-neutral-700 pointer-events-none">
               After
             </div>
-
-            {/* Center Circular Grabber */}
             <div className="w-8 h-8 rounded-full bg-black/90 border-2 border-white text-white flex items-center justify-center text-xs font-bold shadow-2xl hover:scale-110 active:scale-95 transition-transform">
               <span>⇹</span>
             </div>
           </div>
         )}
-
-        {/* Top Viewport Bar removed for minimal UI */}
-
-        {/* Bottom Floating Control Bar (Compact & Sleek) */}
-        {(mode !== 'webcam' || cameraEnabled) && (
-          <div className="absolute bottom-3 sm:bottom-3.5 inset-x-3 sm:inset-x-5 z-30 flex items-center justify-between pointer-events-none">
-            {/* Left: Stop Camera Button */}
-            <div className="flex items-center gap-1.5 sm:gap-2 pointer-events-auto">
-              {mode === 'webcam' && cameraEnabled && (
-                <button
-                  onClick={onStopCamera}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg sm:rounded-xl bg-black/65 hover:bg-red-500/80 backdrop-blur-md border border-white/20 text-white font-medium text-[11px] sm:text-xs shadow-md transition-all cursor-pointer hover:border-red-400/40 hover:scale-[1.02] active:scale-[0.98]"
-                >
-                  <span className="w-1.5 h-1.5 rounded-full bg-red-400 animate-pulse" />
-                  <span>Stop camera</span>
-                </button>
-              )}
-            </div>
-
-            {/* Right: Mirror Flip, Lighting Selector & Capture Look */}
-            <div className="flex items-center gap-1.5 sm:gap-2 pointer-events-auto">
-              {/* Mirror Flip */}
-              {mode === 'webcam' && (
-                <button
-                  onClick={() => {
-                    soundEffects.playClick();
-                    onToggleMirror();
-                  }}
-                  title={mirror ? 'Mirror Flip: Active' : 'Mirror Flip: Normal'}
-                  className="p-1.5 sm:p-2 rounded-lg sm:rounded-xl text-[#ffffff] bg-black/65 hover:bg-[#6d28d9] backdrop-blur-md border border-white/20 transition-all cursor-pointer shadow-md hover:shadow-violet-500/30 hover:scale-105 active:scale-95"
-                >
-                  <FlipHorizontal className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-                </button>
-              )}
-
-              {/* Lighting Preset Selector */}
-              <div className="hidden lg:flex h-8 items-center p-0.5 rounded-lg sm:rounded-xl bg-black/65 backdrop-blur-md border border-white/20 shadow-md">
-                {LIGHTING_PRESETS.map((preset) => (
-                  <button
-                    key={preset.id}
-                    onClick={() => {
-                      soundEffects.playClick();
-                      onLightingChange(preset.id);
-                    }}
-                    className={`px-2.5 py-1 rounded-md sm:rounded-lg text-[10px] sm:text-[11px] font-sans transition-all cursor-pointer ${
-                      lightingPreset === preset.id
-                        ? 'bg-gradient-to-r from-[#7c3aed] to-[#6d28d9] text-white font-semibold shadow-sm shadow-violet-500/30'
-                        : 'text-neutral-300 hover:text-white hover:bg-white/10 font-normal'
-                    }`}
-                  >
-                    {preset.name.split(' ')[0]}
-                  </button>
-                ))}
-              </div>
-
-              {/* Snapshot Shutter Button */}
-              <button
-                onClick={() => {
-                  soundEffects.playShutter();
-                  onCaptureSnapshot();
-                }}
-                className="flex items-center gap-1.5 px-3.5 py-1.5 sm:px-4 sm:py-2 lg:h-8 lg:py-0 rounded-lg sm:rounded-xl bg-gradient-to-r from-[#7c3aed] to-[#6d28d9] hover:from-[#8b5cf6] hover:to-[#7c3aed] text-white font-bold text-[11px] sm:text-xs uppercase tracking-wider shadow-lg shadow-violet-500/35 hover:scale-105 active:scale-95 transition-all cursor-pointer border border-white/25"
-              >
-                <Camera className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-white" />
-                <span>Capture Look</span>
-              </button>
-            </div>
-          </div>
-        )}
       </div>
 
-      {/* 3. Academic Computer Vision & Telemetry Modal */}
+      {/* Academic Computer Vision & Telemetry Modal */}
       <AcademicCVModal
         isOpen={showAcademicModal}
         onClose={() => setShowAcademicModal(false)}

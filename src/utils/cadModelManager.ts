@@ -25,7 +25,6 @@ export const MODEL_TEMPLE_WIDTH = 8.8;
 function getModelPath(product: SunglassesProduct): string {
   if (product.id === 'versace-ve4514d' || product.category === 'Versace') return '/models/versace_ve4514d.glb';
   if (product.category === 'Wayfarer') return '/models/jeeliz/frames.json';
-  if (product.category === 'Hexagonal') return '/models/hexagonal/scene.gltf';
   if (product.category === 'Prada') return '/models/prada_silver.glb';
   if (product.category === 'Matsuda') return '/models/matsuda.glb';
   if (product.category === 'RayBanNew') return '/models/ray-ban_new.glb';
@@ -41,7 +40,6 @@ function isLensMesh(mesh: THREE.Mesh, product: SunglassesProduct): boolean {
     Prada: ['obj26_mat3_0', 'obj27_mat3_0', 'obj28_mat4_0'],
     RayBanNew: ['obj9_mat2_0', 'obj10_mat2_0', 'obj11_mat3_0', 'obj12_mat4_0'],
     Matsuda: ['object_14'],
-    Hexagonal: ['object_6'],
   };
   if (explicit[product.category]) return explicit[product.category].includes(node);
   return /lens|glass/i.test(node + ' ' + material + ' ' + mesh.parent?.name) && !/pad/i.test(node + material);
@@ -163,7 +161,6 @@ function applyPBRMaterials(
     product.frameMaterial.toLowerCase().includes('metal') ||
     product.frameMaterial.toLowerCase().includes('alloy') ||
     product.category === 'Aviator' ||
-    product.category === 'Hexagonal' ||
     product.category === 'Round';
 
   // 1. Physical Frame Material (High-end electroplated metal or piano-lacquer acetate)
@@ -294,8 +291,7 @@ function applyPBRMaterials(
         nodeName.includes('side') ||
         parentName.includes('side') ||
         parentName.includes('plane001') ||
-        (product.category === 'Wayfarer' && nodeName === 'object_6') ||
-        (product.category === 'Hexagonal' && (nodeName === 'object_8' || nodeName === 'object_10'));
+        (product.category === 'Wayfarer' && nodeName === 'object_6');
 
       // Ear sock / temple tips
       const isEarTip =

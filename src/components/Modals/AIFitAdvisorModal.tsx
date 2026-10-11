@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { X, Sparkles, ArrowRight, RefreshCw } from 'lucide-react';
+import { X, Sparkles, ArrowRight, RefreshCw, Camera, ScanFace, Ruler } from 'lucide-react';
 import { FaceMeasurements, SunglassesProduct, TrackingStats } from '../../types';
 import { suggestFrames, FrameShape } from '../../utils/faceFitAdvisor';
 import { ProductThumbnail } from '../Catalog/ProductThumbnail';
@@ -66,6 +66,8 @@ export const AIFitAdvisorModal: React.FC<Props> = ({ isOpen, onClose, onSelectPr
   }, [isOpen, measurement, mirror]);
   if (!isOpen) return null;
   const result = measurement ? suggestFrames(measurement, products) : null;
+  const scanPhase = !cameraEnabled || !stats.faceDetected ? 0 : progress < 35 ? 1 : progress < 75 ? 2 : 3;
+  const scanPhases = ['Camera ready', 'Face detected', 'Measuring face', 'Comparing shapes', 'Preparing picks'];
   return <div className="fit-modal-backdrop" onClick={onClose}>
     <div ref={panel} className="fit-modal" role="dialog" aria-modal="true" aria-labelledby="fit-title" onClick={e => e.stopPropagation()} onKeyDown={e => {
       if (e.key === 'Escape') onClose();
@@ -77,7 +79,19 @@ export const AIFitAdvisorModal: React.FC<Props> = ({ isOpen, onClose, onSelectPr
       }
     }}>
       <header className="fit-modal-header"><div><span className="section-eyebrow">AI-ASSISTED FACE FIT</span><h2 id="fit-title">Frames that complement you.</h2></div><button aria-label="Close fit advisor" onClick={onClose}><X size={20} /></button></header>
-      {!result ? <div className="fit-scan" aria-live="polite"><Sparkles size={32} /><h3>{!cameraEnabled ? 'Allow your camera to find your fit' : stats.faceDetected ? 'Look straight into the camera' : 'Let the camera see your face'}</h3><p>Keep your face centred, with your forehead and jaw visible. Hold still while we collect 12 new front-facing measurements. Results appear only after this scan.</p>{!cameraEnabled ? <button className="frame-capture" onClick={onEnableCamera}>Allow camera & analyze my face</button> : <><canvas ref={before} className="fit-live-preview" aria-label="Live camera preview" /><progress max={100} value={progress} aria-label="Face analysis progress" /><span>{cameraError || cameraMessage || (stats.faceDetected ? `Analyzing your face: ${progress}%` : 'Centre your face in the live preview.')}</span><button className="frame-capture" onClick={() => { startScan(); onEnableCamera(); }}>Restart camera</button></>}</div> : <div className="fit-results">
+      {!result ? <div className={`fit-scan ${cameraEnabled ? 'is-scanning' : ''}`} aria-live="polite">
+        <div className="fit-scan-icon" aria-hidden="true">{cameraEnabled ? <ScanFace size={32} /> : <Sparkles size={32} />}</div>
+        <h3>{!cameraEnabled ? 'Allow your camera to find your fit' : stats.faceDetected ? 'Measuring your face shape' : 'Let the camera see your face'}</h3>
+        <p>Keep your face centred, with your forehead and jaw visible. We measure proportions on your device and compare them with each frame shape. Your camera image stays on this device.</p>
+        {!cameraEnabled ? <button className="frame-capture" onClick={onEnableCamera}><Camera size={16} /> Allow camera & analyze my face</button> : <>
+          <canvas ref={before} className="fit-live-preview" aria-label="Live camera preview" />
+          <div className="fit-scan-progress" role="status" aria-label={`Face analysis ${progress}%`}>
+            <div className="fit-scan-steps">{scanPhases.slice(1).map((phase, index) => <span key={phase} className={scanPhase >= index + 1 ? 'is-complete' : ''}>{index < 2 ? <ScanFace size={14} /> : <Ruler size={14} />}{phase}</span>)}</div>
+            <div className="fit-progress-track"><span style={{ width: `${progress}%` }} /></div>
+            <span className="fit-scan-status">{cameraError || cameraMessage || (stats.faceDetected ? `Analyzing face proportions · ${progress}%` : 'Centre your face in the live preview.')}</span>
+          </div>
+          <button className="frame-capture" onClick={() => { startScan(); onEnableCamera(); }}><RefreshCw size={14} /> Restart scan</button>
+        </>}</div> : <div className="fit-results fit-results-enter">
         <div className="fit-summary">
           <div style={{ flex: 1 }}>
             <span className="detail-label">ESTIMATED FACE SHAPE</span>
@@ -86,10 +100,10 @@ export const AIFitAdvisorModal: React.FC<Props> = ({ isOpen, onClose, onSelectPr
               <span className="fit-confidence-badge">{result.confidence}% shape similarity</span>
             </div>
             <p style={{ marginTop: '8px' }}>{result.reason}</p>
-            <p><strong>Recommended frame shape: {result.recommendedShape ?? 'No suitable models available'}</strong>. {['Square', 'Round', 'Oval'].includes(result.shape) ? 'Showing only frames with the same shape as your face.' : 'Showing the closest available frame silhouette for your face shape.'}</p>
+            <p><strong>Recommended frame shape: {result.recommendedShape ?? 'No suitable models available'}</strong>. {['Square', 'Round', 'Oval'].includes(result.shape) ? 'Showing frames ranked against your measured face proportions.' : 'Showing frames ranked against your measured face proportions.'}</p>
             {result.scores && (
               <div className="fit-scores-breakdown">
-                <span className="fit-scores-title">MORPHOLOGY MATCH PROFILES</span>
+                <span className="fit-scores-title">YOUR PROPORTION MATCH · ALL FACE SHAPES</span>
                 <div className="fit-scores-grid">
                   {Object.entries(result.scores).map(([s, score]) => (
                     <div key={s} className={`fit-score-chip ${s === result.shape ? 'is-dominant' : ''}`}>

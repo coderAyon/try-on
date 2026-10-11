@@ -4,7 +4,7 @@ import { FaceLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
 import { FaceMeasurementSampler } from '../../utils/faceFitAdvisor';
 import type { JeelizGlassesTryOnProps } from './JeelizGlassesTryOn';
 import { loadEyewearCADModel } from '../../utils/cadModelManager';
-import { EyewearRig, eyewearPose, landmarkWorld, StableEyewearPose } from '../../utils/landmarkEyewear';
+import { EyewearRig, eyewearPose, landmarkWorld, StableEyewearPose, faceSkullPose } from '../../utils/landmarkEyewear';
 import { generateStudioEnvironment } from '../../utils/environmentGenerator';
 import { openTryOnCamera, cameraErrorMessage } from '../../utils/cameraAccess';
 import { createFaceDetector, sanitizeEmscriptenEnvironment } from '../../utils/faceDetector';
@@ -35,7 +35,7 @@ export const LandmarkGlassesTryOn: React.FC<JeelizGlassesTryOnProps & { onCamera
     const video = document.createElement('video'); video.muted = true; video.playsInline = true;
     const scene = new THREE.Scene(); sceneRef.current = scene;
     const renderer = new THREE.WebGLRenderer({ canvas: overlay, alpha: true, antialias: true, preserveDrawingBuffer: true });
-    renderer.setPixelRatio(Math.min(devicePixelRatio, 2)); renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5)); renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 0.95;
     rendererRef.current = renderer;
     const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 4000); camera.position.z = 1000;
@@ -49,12 +49,12 @@ export const LandmarkGlassesTryOn: React.FC<JeelizGlassesTryOnProps & { onCamera
     const depthMaterial = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: true, side: THREE.DoubleSide });
     const faceMask = new THREE.Mesh(faceGeometry, depthMaterial); faceMask.renderOrder = -10; faceMask.frustumCulled = false; faceMask.visible = false; scene.add(faceMask);
     const skullGeometry = new THREE.SphereGeometry(1, 32, 24);
-    const skull = new THREE.Mesh(skullGeometry, depthMaterial); skull.renderOrder = -10; root.add(skull);
+    const skull = new THREE.Mesh(skullGeometry, depthMaterial); skull.renderOrder = -10; scene.add(skull); skull.visible = false;
     let width = 1, height = 1;
     const ctx = background.getContext('2d');
     const resize = () => {
       width = Math.max(1, Math.round(container.clientWidth)); height = Math.max(1, Math.round(container.clientHeight));
-      const pixelRatio = Math.min(devicePixelRatio, 2);
+      const pixelRatio = Math.min(devicePixelRatio, 1.5);
       background.width = Math.round(width * pixelRatio); background.height = Math.round(height * pixelRatio);
       ctx?.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
       if (ctx) { ctx.filter = 'none'; ctx.imageSmoothingQuality = 'high'; }
@@ -63,9 +63,12 @@ export const LandmarkGlassesTryOn: React.FC<JeelizGlassesTryOnProps & { onCamera
     };
     resize(); const observer = new ResizeObserver(resize); observer.observe(container);
     let lastVideoTime = -1, lastUi = 0, counted = 0, fpsStart = performance.now(), currentFps = 0;
-    let lostFrames = 0;
+    let lostFrames = 0, lastGoodPoseAt = 0;
     const measurementSampler = new FaceMeasurementSampler();
     const poseStabilizer = new StableEyewearPose();
+    const facePoint = new THREE.Vector3();
+    const faceTransform = new THREE.Matrix4();
+    const faceScale = new THREE.Vector3();
     const processFrame = () => {
       if (cancelled) return;
       frame = requestAnimationFrame(processFrame);
@@ -85,9 +88,9 @@ export const LandmarkGlassesTryOn: React.FC<JeelizGlassesTryOnProps & { onCamera
         const rig = rigRef.current;
         const fit = propsRef.current.calibration;
         if (pose && rig) {
-          lostFrames = 0;
+          lostFrames = 0; lastGoodPoseAt = now;
           const scale = rig.fittedScale(pose.eyeSpan, pose.faceWidth, pose.isFrontal) * (fit?.scale ?? 1) * (63 + (fit?.ipdOffsetMm ?? 0)) / 63;
-          root.position.copy(pose.position);
+          root.position.copy(rig.fittedPosition(pose, scale));
           root.position.addScaledVector(pose.yAxis, (fit?.verticalOffsetMm ?? 0) * pose.eyeSpan / 63);
           root.position.addScaledVector(pose.zAxis, (fit?.depthOffsetMm ?? 0) * pose.eyeSpan / 63);
           root.quaternion.copy(pose.quaternion); root.scale.setScalar(scale); root.updateMatrixWorld(true);
@@ -97,13 +100,16 @@ export const LandmarkGlassesTryOn: React.FC<JeelizGlassesTryOnProps & { onCamera
           // A measured face surface hides the far branch. A skull volume fills
           // the open back of the face mesh, including the forehead/hair region.
           const faceWidth = leftEar.distanceTo(rightEar);
-          skull.position.set((leftEar.x + rightEar.x) / 2, 0.6, (leftEar.z + rightEar.z) / 2 - faceWidth * 0.13);
-          skull.scale.set(faceWidth * 0.49, faceWidth * 0.70, faceWidth * 0.46);
+          const skullPose = faceSkullPose(pose);
+          skull.position.copy(skullPose.position); skull.quaternion.copy(skullPose.quaternion);
+          skull.scale.copy(skullPose.scale); skull.visible = true;
           root.visible = true; faceMask.visible = true;
           const positions = faceGeometry.getAttribute('position') as THREE.BufferAttribute;
+          faceTransform.compose(pose.bridge, pose.quaternion, faceScale.setScalar(pose.eyeSpan));
           for (let i = 0; i < 468; i++) {
-            const p = landmarkWorld(landmarks[i], sourceWidth, sourceHeight);
-            positions.setXYZ(i, p.x, p.y, p.z - pose.eyeSpan * 0.008);
+            const p = pose.surface[i];
+            facePoint.set(p.x, p.y, p.z - .008).applyMatrix4(faceTransform);
+            positions.setXYZ(i, facePoint.x, facePoint.y, facePoint.z);
           }
           positions.needsUpdate = true;
           depthMaterial.colorWrite = !!propsRef.current.debugOccluder;
@@ -128,8 +134,11 @@ export const LandmarkGlassesTryOn: React.FC<JeelizGlassesTryOnProps & { onCamera
             lastUi = now;
           }
         } else {
-          root.visible = false; faceMask.visible = false;
-          if (++lostFrames === 1) {
+          // A one-frame detector miss should not make the glasses blink out.
+          // Hold the last fitted pose briefly, then hide and reacquire cleanly.
+          const withinDropoutGrace = lastGoodPoseAt > 0 && now - lastGoodPoseAt < 140;
+          if (!withinDropoutGrace) { root.visible = false; faceMask.visible = false; skull.visible = false; }
+          if (!withinDropoutGrace && ++lostFrames === 1) {
             setDetected(false); measurementSampler.reset(); poseStabilizer.reset();
             propsRef.current.onStatsUpdate?.({ fps: currentFps, faceDetected: false, landmarksCount: 0, estimatedIpdMm: 63,
               trackingConfidence: 0, depthOcclusionActive: false, headYaw: 0, headPitch: 0, headRoll: 0 });
@@ -139,7 +148,7 @@ export const LandmarkGlassesTryOn: React.FC<JeelizGlassesTryOnProps & { onCamera
         counted++;
         if (now - fpsStart > 1000) { currentFps = Math.round(counted * 1000 / (now - fpsStart)); setFps(currentFps); counted = 0; fpsStart = now; }
       } catch (e) {
-        root.visible = false; faceMask.visible = false; renderer.clear();
+        root.visible = false; faceMask.visible = false; skull.visible = false; renderer.clear();
         setError(e instanceof Error ? e.message : 'Face tracking failed');
         cancelAnimationFrame(frame);
       }
@@ -227,10 +236,7 @@ export const LandmarkGlassesTryOn: React.FC<JeelizGlassesTryOnProps & { onCamera
   return <div ref={containerRef} className="relative w-full h-full bg-black overflow-hidden">
     <canvas ref={backgroundRef} id="landmarkCameraCanvas" className={`absolute inset-0 w-full h-full ${flip}`} />
     <canvas ref={overlayRef} id="landmarkGlassesCanvas" className={`absolute inset-0 w-full h-full pointer-events-none ${flip}`} />
-    {!status && !error && <div className="absolute top-4 left-4 z-20 rounded-full bg-black/75 px-3 py-2 text-xs text-white">
-      <span className={detected ? 'text-emerald-400' : 'text-amber-400'}>●</span> {detected ? 'Face tracking' : 'Face the camera'} · {fps} FPS
-    </div>}
-    {status && !error && <div className={previewReady ? 'absolute top-4 right-4 z-20 rounded-full bg-black/75 px-3 py-2 text-xs text-white' : 'absolute inset-0 z-20 flex items-center justify-center bg-black/70 text-sm text-white'}>{status}</div>}
+    {status && !error && <div className={previewReady ? 'absolute top-4 right-16 z-20 rounded-full bg-black/75 px-3 py-1.5 text-xs text-white' : 'absolute inset-0 z-20 flex items-center justify-center bg-black/70 text-sm text-white'}>{status}</div>}
     {error && <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-4 bg-black/90 p-6 text-white">
       <p className="text-sm text-center" role="alert">{error}</p><button className="rounded-lg bg-white px-4 py-2 text-black" onClick={() => setRetry(value => value + 1)}>Retry camera</button><button className="text-sm underline" onClick={() => props.onSwitchMode?.('photo')}>Use a photo instead</button>
     </div>}

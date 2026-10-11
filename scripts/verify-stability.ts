@@ -55,6 +55,25 @@ for(let i=0;i<180;i++){
 }
 assert(maxLag<3,'Motion lag exceeds 3 degrees');
 assert(maxAnchorError<3,'Translation lag exceeds three source pixels');
+// A vertical nod rotates around the upper face and moves the nasal bridge at
+// the same time. The glasses anchor must track that rigid motion together,
+// including direction changes and common webcam frame rates.
+for(const fps of [20,30,60]){
+ const nod=new StableEyewearPose(),pivot=new THREE.Vector3(0,0,-140);
+ let maxNodPositionError=0,maxNodRotationLag=0;
+ for(let i=0;i<fps*5;i++){
+  const t=i/fps,angle=.24*Math.sin(2*Math.PI*.42*t);
+  const q=new THREE.Quaternion().setFromEuler(new THREE.Euler(angle,0,0));
+  const bridge=pivot.clone().add(new THREE.Vector3().sub(pivot).applyQuaternion(q));
+  const raw=make(q,anchor,100,bridge),fit=nod.update(raw,i*1000/fps);
+  if(i>fps){
+   maxNodPositionError=Math.max(maxNodPositionError,fit.position.distanceTo(raw.position));
+   maxNodRotationLag=Math.max(maxNodRotationLag,fit.quaternion.angleTo(q)*180/Math.PI);
+  }
+ }
+ assert(maxNodPositionError<2,`Vertical nod anchor drift exceeds two pixels at ${fps} fps`);
+ assert(maxNodRotationLag<2,`Vertical nod rotation lag exceeds two degrees at ${fps} fps`);
+}
 // Sudden translation must open the filter instead of leaving the frame behind.
 for(const fps of [20,30,60]){
  stable.reset();stable.update(make(new THREE.Quaternion()),0);

@@ -21,7 +21,9 @@ export function sanitizeEmscriptenEnvironment() {
 export async function createFaceDetector(runningMode: 'IMAGE' | 'VIDEO', numFaces = 1) {
   sanitizeEmscriptenEnvironment();
   const files = await FilesetResolver.forVisionTasks('/tracking/wasm');
-  const confidence = runningMode === 'VIDEO' ? { minFaceDetectionConfidence: .6, minFacePresenceConfidence: .6, minTrackingConfidence: .6 } : {};
+  const confidence = runningMode === 'VIDEO'
+    ? { minFaceDetectionConfidence: .6, minFacePresenceConfidence: .6, minTrackingConfidence: .6 }
+    : { minFaceDetectionConfidence: .3, minFacePresenceConfidence: .35 };
   try {
     sanitizeEmscriptenEnvironment();
     return await FaceLandmarker.createFromOptions(files, { baseOptions: { modelAssetPath: '/tracking/face_landmarker.task', delegate: 'GPU' }, runningMode, numFaces, ...confidence });

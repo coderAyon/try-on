@@ -107,3 +107,24 @@ export interface LightingConfig {
   exposure: number;
   bgGlow: string;
 }
+
+export interface SavedLook {
+  id: string;
+  productId: string;
+  productName: string;
+  variantName: string;
+  dataUrl: string;
+  capturedAt: string;
+  ipdMm: number;
+  faceShape: string;
+}
+
+export interface UserProfile {
+  id: string;
+  name: string;
+  email: string;
+  avatar?: string;
+  preferredStyle?: string;
+  faceShape?: FaceShape;
+  joinedAt: string;
+}

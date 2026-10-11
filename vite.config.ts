@@ -6,7 +6,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 3000,
-    open: false,
+    open: process.env.SUNGLASS_OPEN_BROWSER === '1',
     host: true,
     proxy: {
       '/api': {

@@ -65,11 +65,11 @@ export class FaceMeasurementSampler {
 
 export type FrameShape = 'Round' | 'Oval' | 'Square' | 'Flat' | 'Geometric' | 'Aviator';
 const groups: Record<FrameShape, string[]> = {
-  Round: ['rayban-round-metal', 'imported-obj-classic', 'imported-green-round', 'imported-pack-pink', 'imported-pack-green'],
-  Oval: ['versace-ve4514d', 'matsuda-m2026', 'imported-lis', 'imported-pack-white', 'imported-sunglass-2', 'imported-stylized-full'],
-  Square: ['rayban-wayfarer-classic', 'prada-symbole', 'rayban-meta', 'imported-fano', 'imported-rayban-junior', 'imported-meta-quest', 'imported-meta-red', 'imported-mustang', 'imported-sunglass-3', 'imported-sunglass-original', 'imported-vuzix', 'imported-pack-blue', 'imported-pack-black'],
-  Flat: ['oakley-radar-ev-path', 'imported-pixel', 'imported-stylized-brow', 'imported-sunglass-1', 'imported-sunglass-4', 'imported-fly'],
-  Geometric: ['rayban-hexagonal-flat'], Aviator: ['rayban-aviator-classic', 'imported-pack-aviator'],
+  Round: [ 'imported-obj-classic', 'imported-green-round', 'imported-pack-green'],
+  Oval: ['versace-ve4514d', 'matsuda-m2026', 'imported-pack-white', 'imported-sunglass-2', 'imported-stylized-full'],
+  Square: ['rayban-wayfarer-classic', 'prada-symbole', 'rayban-meta', 'imported-fano', 'imported-rayban-junior', 'imported-meta-quest', 'imported-meta-red', 'imported-mustang', 'imported-sunglass-3', 'imported-sunglass-original', 'imported-vuzix', 'imported-pack-black'],
+  Flat: [ 'imported-pixel', 'imported-stylized-brow', 'imported-sunglass-1', 'imported-sunglass-4', 'imported-fly'],
+  Geometric: [], Aviator: ['rayban-aviator-classic', 'imported-pack-aviator'],
 };
 
 export function frameShape(product: SunglassesProduct): FrameShape {
@@ -184,13 +184,13 @@ export function suggestFrames(measurements: FaceMeasurements, products: Sunglass
   const shape = classifyFace(measurements);
   const adviceData = getPersonalizedAdvice(shape, measurements);
   const ranked = products.map((product, order) => ({ product, shape: frameShape(product), order })).filter(item => adviceData.shapes.includes(item.shape)).sort((a, b) => adviceData.shapes.indexOf(a.shape) - adviceData.shapes.indexOf(b.shape) || a.order - b.order);
-  // Choose the highest-priority available silhouette, then show every model in it.
-  // If no suitable silhouette is stocked, leave the recommendations empty.
+  // Keep the complete ordered set of complementary silhouettes. The first
+  // available shape remains the lead pick; additional options stay visible.
   const recommendedShape = ranked[0]?.shape ?? null;
-  const frames = ranked.filter(item => item.shape === recommendedShape);
+  const frames = ranked;
   return {
     shape,
-    shapes: recommendedShape ? [recommendedShape] : [],
+    shapes: [...new Set(ranked.map(item => item.shape))],
     recommendedShape,
     reason: adviceData.reason,
     confidence: measurements.confidence ?? 92,

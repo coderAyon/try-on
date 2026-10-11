@@ -678,27 +678,9 @@ export const JeelizGlassesTryOn: React.FC<JeelizGlassesTryOnProps> = ({
         </div>
       )}
 
-      {/* Running HUD + Calibration Button */}
-      {initStatus === 'running' && (
-        <div className="absolute top-4 left-4 z-20 flex flex-col items-start gap-2">
-          <div className="glass-panel px-3 py-1.5 rounded-full border border-neutral-700/80 bg-neutral-950/80 backdrop-blur-md flex items-center gap-2 text-xs font-mono pointer-events-none">
-            <span
-              className={`w-2 h-2 rounded-full ${
-                isFaceDetected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'
-              }`}
-            />
-            <span className="text-white font-semibold">
-              {isFaceDetected ? 'Face Locked 6DOF' : 'Align Face to Camera'}
-            </span>
-            <span className="text-neutral-500">|</span>
-            <span className="text-neutral-400">{fps} FPS</span>
-            {isFaceDetected && (
-              <>
-                <span className="text-neutral-500">|</span>
-                <span className="text-amber-400">{confidence}%</span>
-              </>
-            )}
-          </div>
+      {/* Running Calibration Button (if active) */}
+      {initStatus === 'running' && isFaceDetected && calibMode && (
+        <div className="absolute top-14 left-4 z-20 flex flex-col items-start gap-2">
 
           {isFaceDetected && (
             <button

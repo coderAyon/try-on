@@ -354,6 +354,21 @@ class DatabaseService {
     return this.data.savedLooks;
   }
 
+  public deleteLook(id: string): boolean {
+    const prevLen = this.data.savedLooks.length;
+    this.data.savedLooks = this.data.savedLooks.filter((l) => l.id !== id);
+    if (this.data.savedLooks.length !== prevLen) {
+      this.persist();
+      return true;
+    }
+    return false;
+  }
+
+  public clearLooks(): void {
+    this.data.savedLooks = [];
+    this.persist();
+  }
+
   public logTelemetry(log: Omit<TelemetryLog, 'id' | 'timestamp'>): void {
     const entry: TelemetryLog = {
       ...log,

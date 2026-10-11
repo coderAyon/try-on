@@ -9,6 +9,7 @@ interface SnapshotPreviewModalProps {
   onClose: () => void;
   snapshotDataUrl: string | null;
   product: SunglassesProduct;
+  onOpenGallery?: () => void;
 }
 
 export const SnapshotPreviewModal: React.FC<SnapshotPreviewModalProps> = ({
@@ -16,6 +17,7 @@ export const SnapshotPreviewModal: React.FC<SnapshotPreviewModalProps> = ({
   onClose,
   snapshotDataUrl,
   product,
+  onOpenGallery,
 }) => {
   if (!isOpen || !snapshotDataUrl) return null;
 
@@ -90,7 +92,21 @@ export const SnapshotPreviewModal: React.FC<SnapshotPreviewModalProps> = ({
             Captured in 1080p WebGL with PBR reflection shaders
           </p>
 
-          <div className="flex items-center gap-3 w-full sm:w-auto">
+          <div className="flex items-center gap-2.5 w-full sm:w-auto">
+            {onOpenGallery && (
+              <button
+                onClick={() => {
+                  soundEffects.playClick();
+                  onClose();
+                  onOpenGallery();
+                }}
+                className="flex-1 sm:flex-initial px-4 py-2.5 rounded-xl bg-[#6355f6]/20 border border-[#6355f6]/40 text-[#c4b5fd] hover:text-white hover:bg-[#6355f6]/30 text-xs font-semibold transition-colors cursor-pointer flex items-center justify-center gap-1.5"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-[#a78bfa]" />
+                <span>View in Gallery</span>
+              </button>
+            )}
+
             <button
               onClick={() => {
                 soundEffects.playClick();

@@ -22,21 +22,37 @@ export function eyewearPose(landmarks: Landmark[], width: number, height: number
   const quaternion = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(xAxis, yAxis, zAxis));
   const position = leftEye.clone().add(rightEye).multiplyScalar(0.5);
   const bridge = world(168);
+  // Average the lower brow contour on both sides, in head-local coordinates.
+  // Multiple points keep one noisy landmark / raised eyebrow from dominating.
+  const browHeight = [46, 53, 52, 276, 283, 282]
+    .reduce((sum, i) => sum + world(i).sub(position).dot(yAxis), 0) / 6;
   // Natural resting position:
   // Sunglasses bridge rests on the nasal saddle / radix (landmark 168),
-  // naturally framing the supraorbital brow and centering the eyes at the optical 62-65% height of the lenses.
+  // Keep the optical centre near the eyes, with a bounded lift for the nasal saddle.
   const bridgeHeight = bridge.clone().sub(position).dot(yAxis);
-  const naturalBrowLift = Math.max(eyeSpan * 0.10, bridgeHeight * 0.80);
+  const browLimit = browHeight > eyeSpan * .08 ? browHeight * .30 : eyeSpan * .08;
+  const naturalBrowLift = THREE.MathUtils.clamp(
+    Math.min(bridgeHeight * .55, browLimit), eyeSpan * .04, eyeSpan * .10);
   position.addScaledVector(yAxis, naturalBrowLift);
-  position.addScaledVector(zAxis, bridge.clone().sub(position).dot(zAxis) + eyeSpan * 0.025);
+  position.addScaledVector(zAxis, bridge.clone().sub(position).dot(zAxis) + eyeSpan * 0.012);
 
   const euler = new THREE.Euler().setFromQuaternion(quaternion, 'YXZ');
   const isFrontal = Math.abs(euler.y) < 0.26 && Math.abs(euler.x) < 0.26;
   const headAxis = world(356).sub(world(127)).normalize();
+  // Build the head-local face surface with one inverse transform per frame.
+  // The previous per-landmark quaternion clone/invert added hundreds of
+  // temporary objects to the synchronous camera loop and made lower-end GPUs
+  // drop tracking frames during turns.
+  const inverseQuaternion = quaternion.clone().invert();
 
   return {
     position,
     bridge,
+    // Normalized face anatomy, anchored to the nasal saddle rather than screen axes.
+    surface: landmarks.slice(0, 468).map((_, i) => world(i).sub(bridge)
+      .applyQuaternion(inverseQuaternion).divideScalar(eyeSpan)),
+    eyeLift: naturalBrowLift,
+    browHeight: browHeight > eyeSpan * .08 ? browHeight : undefined,
     quaternion,
     eyeSpan,
     // Temple landmarks are outside the eyelids and do not contract on a blink.
@@ -73,6 +89,9 @@ export class StableEyewearPose {
   private bridgeVelocity = new THREE.Vector3();
   private spanVelocity = 0;
   private time = 0;
+  private browRatio: number | undefined;
+  private liftRatio = .08;
+  private surface: THREE.Vector3[] | null = null;
 
   reset() {
     this.rotation = null;
@@ -80,6 +99,8 @@ export class StableEyewearPose {
     this.localAnchor = null;
     this.bridge = null;
     this.time = 0;
+    this.browRatio = undefined;
+    this.surface = null;
     this.velocity.set(0, 0, 0);
     this.angularDirection.set(0, 0, 0);
     this.coherentAngularSamples = 0;
@@ -103,6 +124,33 @@ export class StableEyewearPose {
     const measuredSpan = headSpan ? headSpan * this.headToEyeRatio : pose.eyeSpan;
     const measuredFaceWidth = pose.scaleFaceWidth && pose.scaleFaceWidth > 8
       ? pose.scaleFaceWidth * this.headToFaceRatio : pose.faceWidth;
+    // Preserve the detector's current face shape at oblique angles. Replaying
+    // a frozen frontal shape gave incorrect temple targets on real head nods.
+    const surfaceRatio = pose.eyeSpan / measuredSpan;
+    // This pose owns its per-frame surface array, so scale it in place instead
+    // of cloning 468 Vector3 objects on every camera frame.
+    if (pose.surface) {
+      for (const point of pose.surface) point.multiplyScalar(surfaceRatio);
+      if (reacquiring || !this.surface || this.surface.length !== pose.surface.length) {
+        this.surface = pose.surface;
+      } else {
+        // Smooth the face occluder in head-local space. The glasses pose still
+        // follows the filtered head transform immediately; smoothing only
+        // prevents raw mesh noise from making lens edges pop through the skin.
+        const surfaceAlpha = alpha(5);
+        for (let i = 0; i < pose.surface.length; i++) this.surface[i].lerp(pose.surface[i], surfaceAlpha);
+      }
+    } else this.surface = null;
+    if (reacquiring) this.browRatio = undefined;
+    if (pose.browHeight !== undefined && (reacquiring || pose.isFrontal !== false)) {
+      const measuredBrowRatio = pose.browHeight / measuredSpan;
+      this.browRatio = reacquiring || this.browRatio === undefined ? measuredBrowRatio
+        : THREE.MathUtils.lerp(this.browRatio, measuredBrowRatio, alpha(.8));
+    }
+    if (reacquiring || pose.isFrontal !== false) {
+      this.liftRatio = reacquiring ? (pose.eyeLift ?? measuredSpan * .08) / measuredSpan
+        : THREE.MathUtils.lerp(this.liftRatio, (pose.eyeLift ?? measuredSpan * .08) / measuredSpan, alpha(.8));
+    }
     const offset = pose.position.clone().sub(pose.bridge).applyQuaternion(pose.quaternion.clone().invert()).divideScalar(measuredSpan);
 
     if (!this.rotation || !this.localAnchor || now - this.time > 250) {
@@ -132,14 +180,23 @@ export class StableEyewearPose {
       this.coherentAngularSamples = derivative.dot(this.angularDirection) > 0
         ? this.coherentAngularSamples + 1 : 0;
       this.angularDirection.copy(derivative);
-      this.velocity.lerp(derivative, alpha(3));
+      this.velocity.lerp(derivative, alpha(1.5));
       const rotSpeed = this.velocity.length();
-      // Responsive cutoff: adapts smoothly to speed so turns follow immediately with zero lag
+      // Adaptive response follows intentional turns while damping detector noise.
       // Alternating small detector errors must not open the movement filter.
       // Coherent turns and larger movements retain the existing fast response.
-      const stationaryRotation = this.coherentAngularSamples < 2 && this.rotation.angleTo(pose.quaternion) < .045;
-      const rotCutoff = stationaryRotation ? 1.2 : 1.2 + Math.max(0, rotSpeed - 0.03) * 18 + Math.min(12, rotSpeed * 35);
-      this.rotation.slerp(pose.quaternion, alpha(rotCutoff));
+      const stationaryRotation = this.coherentAngularSamples < 2 && rotSpeed < .45 && this.rotation.angleTo(pose.quaternion) < .045;
+      const rotCutoff = stationaryRotation ? 1.2
+        : 1.2 + Math.max(0, rotSpeed - 0.03) * 4.5 + Math.min(2.8, rotSpeed * 2.8);
+      // Keep some smoothing active even during a nod; a fast detector sample
+      // should not make the complete frame snap to a noisy landmark estimate.
+      this.rotation.slerp(pose.quaternion, alpha(Math.min(6.5, rotCutoff)));
+      const bridgeDerivative = pose.bridge.clone().sub(this.previousBridge).divideScalar(dt * measuredSpan);
+      this.bridgeVelocity.lerp(bridgeDerivative, alpha(3));
+      const speed = this.bridgeVelocity.length();
+      const displacement = this.bridge!.distanceTo(pose.bridge) / Math.max(8, measuredSpan);
+      const posCutoff = displacement < .015 ? 1.4
+        : 1.4 + Math.max(0, speed - 0.02) * 9 + Math.max(0, displacement - 0.01) * 40;
       this.localAnchor.lerp(offset, alpha(0.8));
 
       // 2. Continuous Adaptive One-Euro Scale Filter (Butter-smooth zoom in/out + rock-solid stationary lock)
@@ -165,14 +222,9 @@ export class StableEyewearPose {
       const spanCutoff = 0.38 + zoomSpeed * 28.0 * rotDamping;
       this.span += (measuredSpan - this.span) * alpha(spanCutoff);
 
-      // 3. Fast Nose Bridge Position Responsiveness
-      const bridgeDerivative = pose.bridge.clone().sub(this.previousBridge).divideScalar(dt * measuredSpan);
-      this.bridgeVelocity.lerp(bridgeDerivative, alpha(3));
-      const speed = this.bridgeVelocity.length();
-      const displacement = this.bridge!.distanceTo(pose.bridge) / Math.max(8, measuredSpan);
-      const posCutoff = displacement < .015 ? 1.4
-        : 1.4 + Math.max(0, speed - 0.02) * 22 + Math.max(0, displacement - 0.01) * 120;
-      this.bridge!.lerp(pose.bridge, alpha(posCutoff));
+      // Keep the translation filter independent: position noise must not open
+      // the rotation filter and amplify wobble when the head is moving.
+      this.bridge!.lerp(pose.bridge, alpha(Math.min(9.5, posCutoff)));
     }
 
     this.previousBridge.copy(pose.bridge);
@@ -188,14 +240,34 @@ export class StableEyewearPose {
     return {
       ...pose,
       bridge,
+      surface: this.surface ?? pose.surface,
       position,
       quaternion,
       eyeSpan,
+      leftTemple: pose.leftTemple,
+      rightTemple: pose.rightTemple,
+      eyeLift: this.liftRatio * eyeSpan,
+      browHeight: this.browRatio === undefined ? undefined : this.browRatio * eyeSpan,
       faceWidth: (measuredFaceWidth / measuredSpan) * eyeSpan,
       yAxis: new THREE.Vector3(0, 1, 0).applyQuaternion(quaternion),
       zAxis: new THREE.Vector3(0, 0, 1).applyQuaternion(quaternion),
     };
   }
+}
+
+// The back-of-head occluder belongs to the face, independently of frame fitting.
+export function faceSkullPose(pose: EyewearPose) {
+  const width = pose.leftTemple.distanceTo(pose.rightTemple);
+  return {
+    position: pose.leftTemple.clone().add(pose.rightTemple).multiplyScalar(.5)
+      .addScaledVector(pose.yAxis, width * .06)
+      // Keep the synthetic cranium behind the measured face surface. The old
+      // sphere reached 18% of face width in front of the temples and depth-
+      // occluded the glasses, making them appear embedded in the face.
+      .addScaledVector(pose.zAxis, -width * .38),
+    scale: new THREE.Vector3(width * .49, width * .70, width * .34),
+    quaternion: pose.quaternion,
+  };
 }
 
 interface RigMesh { mesh: THREE.Mesh; source: Float32Array }
@@ -269,6 +341,9 @@ export class EyewearRig {
   readonly eyeDistance: number;
   readonly frontWidth: number;
   private fitRatio: number | null = null;
+  private lensTop: number | undefined;
+  private lensClearanceBounds: THREE.Box3[] | null = null;
+  private clearanceRatio = 0;
   private meshes: RigMesh[] = [];
   private hingeDepth = -.55;
   private tails = [new THREE.Vector3(-4.4, 0, -6), new THREE.Vector3(4.4, 0, -6)];
@@ -383,7 +458,7 @@ export class EyewearRig {
     const cutoffs = this.tails.map((tail, side) => {
       if (!Number.isFinite(back[side]) || back[side] >= this.hingeDepth) return -Infinity;
       const contactDepth = Math.max(tail.z, contacts[side]);
-      return this.hingeDepth + (contactDepth - this.hingeDepth) * .85;
+      return this.hingeDepth + (contactDepth - this.hingeDepth) * .91;
     });
     for (const entry of this.meshes) {
       const original = entry.mesh.geometry;
@@ -413,6 +488,54 @@ export class EyewearRig {
       this.fitRatio += (ratio - this.fitRatio) * 0.035;
     }
     return eyeSpan * Math.max(1 / this.eyeDistance, this.fitRatio * 1.04 / this.frontWidth) * frameFitScale(this.productId);
+  }
+  fittedPosition(pose: EyewearPose, scale: number) {
+    const position = pose.position.clone();
+    if (this.lensTop === undefined) {
+      const bounds = [new THREE.Box3(), new THREE.Box3()];
+      for (const { mesh, source } of this.meshes) {
+        if (!/lens/i.test(mesh.name)) continue;
+        for (let i = 0; i < source.length; i += 3) {
+          bounds[source[i] < 0 ? 0 : 1].expandByPoint(new THREE.Vector3(source[i], source[i + 1], source[i + 2]));
+        }
+      }
+      this.lensClearanceBounds = bounds.filter(box => !box.isEmpty());
+      this.lensTop = this.lensClearanceBounds.length
+        ? Math.max(...this.lensClearanceBounds.map(box => box.max.y)) : 0;
+    }
+    if (pose.browHeight !== undefined) {
+      const topHeight = pose.eyeLift + this.lensTop * scale;
+      const correction = THREE.MathUtils.clamp(topHeight - pose.browHeight - pose.eyeSpan * .025,
+        0, pose.eyeSpan * .08);
+      position.addScaledVector(pose.yAxis, -correction);
+    }
+    if (pose.surface?.length) {
+      const inverse = pose.quaternion.clone().invert();
+      const localOrigin = position.clone().sub(pose.bridge).applyQuaternion(inverse);
+      let clearance = 0;
+      const point = new THREE.Vector3();
+      for (const box of this.lensClearanceBounds!) {
+        // Test facial samples under each lens, including cheek and eye sockets.
+        // Exclude the nasal tip between lenses, where the bridge has its own seat.
+        for (const sample of pose.surface) {
+          point.copy(sample).multiplyScalar(pose.eyeSpan).sub(localOrigin).divideScalar(scale);
+          if (point.x < box.min.x || point.x > box.max.x || point.y < box.min.y || point.y > box.max.y) continue;
+          // The lens's camera-facing surface is max.z. Measuring from min.z
+          // used its back face, so a face correctly behind the lens still
+          // looked like a collision and the glasses stayed buried in the face.
+          clearance = Math.max(clearance, (point.z - box.max.z) * scale + pose.eyeSpan * .012);
+        }
+      }
+      // Never move the bridge away from its nasal seat to clear a cheek estimate.
+      // A depth-only correction changes screen height sharply during a head nod.
+      const ratio = Math.min(Math.max(0, clearance) / pose.eyeSpan, .06);
+      // Move immediately when skin would occlude the lens; release gradually
+      // to keep the glasses face-locked as the cheek contour changes in 3D.
+      this.clearanceRatio = ratio > this.clearanceRatio ? ratio
+        : THREE.MathUtils.lerp(this.clearanceRatio, ratio, .08);
+      position.addScaledVector(pose.zAxis, this.clearanceRatio * pose.eyeSpan);
+    }
+    return position;
   }
   fitTemples(leftEar: THREE.Vector3, rightEar: THREE.Vector3) {
     // These are head-local proportions, not screen positions. Reuse the fitted

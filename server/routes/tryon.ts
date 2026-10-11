@@ -55,4 +55,25 @@ router.get('/looks', (_req: Request, res: Response) => {
   }
 });
 
+// DELETE /api/tryon/looks/:id
+router.delete('/looks/:id', (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const deleted = db.deleteLook(id);
+    res.json({ success: deleted, message: deleted ? 'Look deleted' : 'Look not found' });
+  } catch (err: unknown) {
+    res.status(500).json({ success: false, error: (err as Error).message });
+  }
+});
+
+// DELETE /api/tryon/looks
+router.delete('/looks', (_req: Request, res: Response) => {
+  try {
+    db.clearLooks();
+    res.json({ success: true, message: 'All looks cleared' });
+  } catch (err: unknown) {
+    res.status(500).json({ success: false, error: (err as Error).message });
+  }
+});
+
 export default router;

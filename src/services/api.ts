@@ -218,6 +218,17 @@ export async function getReviewsAPI(productId: string): Promise<ReviewAPI[]> {
 }
 
 // 6. Try-On Looks API
+export async function getSavedLooksAPI() {
+  try {
+    const res = await fetch(`${API_BASE}/tryon/looks`);
+    const data = await res.json();
+    return data.success && Array.isArray(data.data) ? data.data : [];
+  } catch (err) {
+    console.warn('Backend fetch for looks failed, falling back to local state:', err);
+    return [];
+  }
+}
+
 export async function saveLookAPI(payload: {
   productId: string;
   productName: string;
@@ -235,6 +246,30 @@ export async function saveLookAPI(payload: {
     return await res.json();
   } catch (err) {
     console.error('Failed to save look:', err);
+    return { success: false };
+  }
+}
+
+export async function deleteLookAPI(id: string) {
+  try {
+    const res = await fetch(`${API_BASE}/tryon/looks/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+    return await res.json();
+  } catch (err) {
+    console.warn('Failed to delete look from backend:', err);
+    return { success: false };
+  }
+}
+
+export async function clearAllLooksAPI() {
+  try {
+    const res = await fetch(`${API_BASE}/tryon/looks`, {
+      method: 'DELETE',
+    });
+    return await res.json();
+  } catch (err) {
+    console.warn('Failed to clear looks from backend:', err);
     return { success: false };
   }
 }
