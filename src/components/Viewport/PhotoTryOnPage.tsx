@@ -39,53 +39,94 @@ function createContactShadowTexture(): THREE.CanvasTexture {
 
 function prepareCustomFrame(image: HTMLImageElement): HTMLCanvasElement {
   const scale = Math.min(1, 1400 / Math.max(image.naturalWidth, image.naturalHeight));
-  const canvas = document.createElement('canvas');
-  canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
-  canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  if (!ctx) throw Error('Custom frame preview is unavailable.');
-  ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+  const rawCanvas = document.createElement('canvas');
+  rawCanvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+  rawCanvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+  const rCtx = rawCanvas.getContext('2d', { willReadFrequently: true });
+  if (!rCtx) throw Error('Custom frame preview is unavailable.');
+  rCtx.drawImage(image, 0, 0, rawCanvas.width, rawCanvas.height);
 
-  // Keep existing transparency. For product shots on a plain background,
-  // remove only the connected background touching the image edges.
-  const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const { width: w, height: h } = rawCanvas;
+  const pixels = rCtx.getImageData(0, 0, w, h);
   const { data } = pixels;
-  let hasTransparency = false;
-  for (let i = 3; i < data.length; i += 64) {
-    if (data[i] < 245) { hasTransparency = true; break; }
+
+  // 1. Detect background color from outer corners
+  const corners = [[0, 0], [w - 1, 0], [0, h - 1], [w - 1, h - 1]]
+    .map(([x, y]) => ((y * w + x) * 4));
+  const background = [0, 1, 2].map(channel => Math.round(corners.reduce((sum, i) => sum + data[i + channel], 0) / 4));
+  const isLightBg = (background[0] + background[1] + background[2]) / 3 > 215;
+
+  // 2. Flood fill connected outer background from perimeter edges
+  const visited = new Uint8Array(w * h);
+  const queue = new Uint32Array(w * h);
+  let head = 0, tail = 0;
+  const add = (index: number) => {
+    if (visited[index]) return;
+    const pixel = index * 4;
+    const distance = Math.abs(data[pixel] - background[0]) + Math.abs(data[pixel + 1] - background[1]) + Math.abs(data[pixel + 2] - background[2]);
+    if (distance > 80 && (data[pixel + 3] < 20 || !isLightBg)) return;
+    visited[index] = 1; queue[tail++] = index;
+  };
+  for (let x = 0; x < w; x++) { add(x); add((h - 1) * w + x); }
+  for (let y = 0; y < h; y++) { add(y * w); add(y * w + w - 1); }
+  while (head < tail) {
+    const index = queue[head++];
+    const x = index % w, y = Math.floor(index / w);
+    data[index * 4 + 3] = 0;
+    if (x > 0) add(index - 1);
+    if (x + 1 < w) add(index + 1);
+    if (y > 0) add(index - w);
+    if (y + 1 < h) add(index + w);
   }
-  if (!hasTransparency) {
-    const w = canvas.width, h = canvas.height;
-    const corners = [[0, 0], [w - 1, 0], [0, h - 1], [w - 1, h - 1]]
-      .map(([x, y]) => ((y * w + x) * 4));
-    const background = [0, 1, 2].map(channel => Math.round(corners.reduce((sum, i) => sum + data[i + channel], 0) / 4));
-    const uniform = corners.every(i => Math.abs(data[i] - background[0]) < 34 && Math.abs(data[i + 1] - background[1]) < 34 && Math.abs(data[i + 2] - background[2]) < 34);
-    if (uniform) {
-      const visited = new Uint8Array(w * h);
-      const queue = new Uint32Array(w * h);
-      let head = 0, tail = 0;
-      const add = (index: number) => {
-        if (visited[index]) return;
-        const pixel = index * 4;
-        const distance = Math.abs(data[pixel] - background[0]) + Math.abs(data[pixel + 1] - background[1]) + Math.abs(data[pixel + 2] - background[2]);
-        if (distance > 72) return;
-        visited[index] = 1; queue[tail++] = index;
-      };
-      for (let x = 0; x < w; x++) { add(x); add((h - 1) * w + x); }
-      for (let y = 0; y < h; y++) { add(y * w); add(y * w + w - 1); }
-      while (head < tail) {
-        const index = queue[head++];
-        const x = index % w, y = Math.floor(index / w);
-        data[index * 4 + 3] = 0;
-        if (x > 0) add(index - 1);
-        if (x + 1 < w) add(index + 1);
-        if (y > 0) add(index - w);
-        if (y + 1 < h) add(index + w);
+
+  // 3. Clear enclosed background cavities and diffuse tabletop ground reflections
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const idx = (y * w + x) * 4;
+      if (data[idx + 3] <= 20) continue;
+      const r = data[idx], g = data[idx + 1], b = data[idx + 2];
+      const sat = Math.max(r, g, b) - Math.min(r, g, b);
+      const avg = (r + g + b) / 3;
+
+      // Pure white or neutral light cavity fill (e.g. between double brow bar and nose bridge)
+      if (avg > 222 && sat < 22) {
+        data[idx + 3] = 0;
+      } else if (y > h * 0.55 && avg > 165 && sat < 22) {
+        // Tabletop ground reflection/shadow under bottom rim
+        data[idx + 3] = 0;
       }
-      ctx.putImageData(pixels, 0, 0);
     }
   }
-  return canvas;
+
+  // 4. Tight crop to content bounding box
+  let minX = w, maxX = 0, minY = h, maxY = 0;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (data[(y * w + x) * 4 + 3] > 20) {
+        minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+        minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+      }
+    }
+  }
+
+  if (maxX <= minX || maxY <= minY) {
+    rCtx.putImageData(pixels, 0, 0);
+    return rawCanvas;
+  }
+
+  const cropW = maxX - minX + 1;
+  const cropH = maxY - minY + 1;
+  rCtx.putImageData(pixels, 0, 0);
+
+  const cropped = document.createElement('canvas');
+  cropped.width = cropW;
+  cropped.height = cropH;
+  const cCtx = cropped.getContext('2d')!;
+  cCtx.imageSmoothingEnabled = true;
+  cCtx.imageSmoothingQuality = 'high';
+  cCtx.drawImage(rawCanvas, minX, minY, cropW, cropH, 0, 0, cropW, cropH);
+
+  return cropped;
 }
 
 interface EyewearGeometry {
@@ -104,38 +145,21 @@ interface EyewearGeometry {
 function analyzeEyewearGeometry(canvas: HTMLCanvasElement): EyewearGeometry {
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) throw Error('Could not analyze sunglasses image.');
-  const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
   const width = canvas.width;
   const height = canvas.height;
-
-  let minX = width, minY = height, maxX = 0, maxY = 0;
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      if (data[(y * width + x) * 4 + 3] > 16) {
-        minX = Math.min(minX, x);
-        maxX = Math.max(maxX, x);
-        minY = Math.min(minY, y);
-        maxY = Math.max(maxY, y);
-      }
-    }
-  }
-
-  if (maxX <= minX || maxY <= minY) {
-    throw Error('No visible sunglasses found in this image.');
-  }
+  const { data } = ctx.getImageData(0, 0, width, height);
 
   // Column vertical spans and area counts
-  const colSpan = new Int32Array(width);
-  const colCount = new Int32Array(width);
+  const density = new Float32Array(width);
   const colTopY = new Int32Array(width).fill(-1);
   const colBotY = new Int32Array(width).fill(-1);
   const colCenterY = new Float32Array(width);
-  let maxColSpan = 0;
+  let maxD = 0;
 
-  for (let x = minX; x <= maxX; x++) {
+  for (let x = 0; x < width; x++) {
     let topY = -1, botY = -1, count = 0;
-    for (let y = minY; y <= maxY; y++) {
-      if (data[(y * width + x) * 4 + 3] > 16) {
+    for (let y = 0; y < height; y++) {
+      if (data[(y * width + x) * 4 + 3] > 20) {
         if (topY < 0) topY = y;
         botY = y;
         count++;
@@ -144,90 +168,106 @@ function analyzeEyewearGeometry(canvas: HTMLCanvasElement): EyewearGeometry {
     if (topY >= 0) {
       colTopY[x] = topY;
       colBotY[x] = botY;
-      colSpan[x] = botY - topY + 1;
-      colCount[x] = count;
       colCenterY[x] = (topY + botY) * 0.5;
-      if (colSpan[x] > maxColSpan) maxColSpan = colSpan[x];
+      density[x] = count;
+      if (count > maxD) maxD = count;
     }
   }
 
-  // Dense lens threshold: temple arms are thin (< 32% of max lens height)
-  // This cleanly isolates the two main lenses from any extending side arms.
-  const lensHeightThreshold = Math.max(12, maxColSpan * 0.32);
-  let lensMinX = maxX, lensMaxX = minX;
-  let lensTopY = height, lensBottomY = 0;
+  if (maxD < 4) throw Error('No visible sunglasses found in this image.');
 
-  for (let x = minX; x <= maxX; x++) {
-    if (colSpan[x] >= lensHeightThreshold) {
-      lensMinX = Math.min(lensMinX, x);
-      lensMaxX = Math.max(lensMaxX, x);
-      lensTopY = Math.min(lensTopY, colTopY[x]);
-      lensBottomY = Math.max(lensBottomY, colBotY[x]);
-    }
-  }
-
-  if (lensMaxX <= lensMinX || lensBottomY <= lensTopY) {
-    lensMinX = minX;
-    lensMaxX = maxX;
-    lensTopY = minY;
-    lensBottomY = maxY;
-  }
-
-  const lensHeight = Math.max(16, lensBottomY - lensTopY + 1);
-  const frontWidth = Math.max(20, lensMaxX - lensMinX + 1);
-  const lensMidX = Math.round((lensMinX + lensMaxX) * 0.5);
-
-  // Smooth spans (weighted so dense lens columns dominate over thin temple arms)
+  // Smooth density
   const smoothed = new Float32Array(width);
-  for (let x = lensMinX; x <= lensMaxX; x++) {
+  const win = Math.max(2, Math.round(width * 0.025));
+  for (let x = 0; x < width; x++) {
     let sum = 0, count = 0;
-    for (let k = Math.max(lensMinX, x - 4); k <= Math.min(lensMaxX, x + 4); k++) {
-      sum += colSpan[k] * (colCount[k] || 1);
-      count += colCount[k] || 1;
+    for (let k = Math.max(0, x - win); k <= Math.min(width - 1, x + win); k++) {
+      sum += density[k]; count++;
     }
-    smoothed[x] = count > 0 ? sum / count : colSpan[x];
+    smoothed[x] = sum / count;
   }
 
-  // Left lens peak (tallest dense column in left half of lenses)
-  let peakLeftX = lensMinX;
-  let maxLeft = 0;
-  for (let x = lensMinX; x < lensMidX; x++) {
+  // Front frame boundaries: exclude thin trailing temple arms after significant gap or drop
+  let frontMinX = 0, frontMaxX = width - 1;
+  const gapThresh = Math.max(3, maxD * 0.12);
+  for (let x = Math.round(width * 0.40); x < width - 8; x++) {
+    if (density[x] <= gapThresh) {
+      let gapLen = 0;
+      while (x + gapLen < width && density[x + gapLen] <= gapThresh) gapLen++;
+      if (gapLen > Math.max(10, width * 0.07)) {
+        frontMaxX = x;
+        break;
+      }
+    }
+  }
+  for (let x = Math.round(width * 0.60); x > 8; x--) {
+    if (density[x] <= gapThresh) {
+      let gapLen = 0;
+      while (x - gapLen >= 0 && density[x - gapLen] <= gapThresh) gapLen++;
+      if (gapLen > Math.max(10, width * 0.07)) {
+        frontMinX = x;
+        break;
+      }
+    }
+  }
+
+  const midX = (frontMinX + frontMaxX) * 0.5;
+
+  // Left lens peak (tallest dense column in left half of front frame)
+  let peakLeftX = frontMinX, maxLeft = 0;
+  for (let x = frontMinX; x < midX; x++) {
     if (smoothed[x] > maxLeft) {
       maxLeft = smoothed[x];
       peakLeftX = x;
     }
   }
 
-  // Right lens peak (tallest dense column in right half of lenses)
-  let peakRightX = lensMidX;
-  let maxRight = 0;
-  for (let x = lensMidX; x <= lensMaxX; x++) {
+  // Right lens peak (tallest dense column in right half of front frame)
+  let peakRightX = Math.round(midX), maxRight = 0;
+  for (let x = Math.round(midX); x <= frontMaxX; x++) {
     if (smoothed[x] > maxRight) {
       maxRight = smoothed[x];
       peakRightX = x;
     }
   }
 
+  // Minimum valley bridge between peaks
+  let minValley = 999, bridgeX = Math.round((peakLeftX + peakRightX) * 0.5);
+  for (let x = peakLeftX; x <= peakRightX; x++) {
+    if (smoothed[x] < minValley) {
+      minValley = smoothed[x];
+      bridgeX = x;
+    }
+  }
+
   const lensSpan = Math.max(20, peakRightX - peakLeftX);
-  const bridgeX = (peakLeftX + peakRightX) * 0.5;
+  const frontWidth = frontMaxX - frontMinX + 1;
+
+  // Measure dense lens height around the lens peaks
+  let lensTopY = height, lensBottomY = 0;
+  const sampleCols = [peakLeftX, peakRightX, Math.round((peakLeftX + bridgeX) * 0.5), Math.round((peakRightX + bridgeX) * 0.5)];
+  for (const x of sampleCols) {
+    if (x >= 0 && x < width && colTopY[x] >= 0) {
+      lensTopY = Math.min(lensTopY, colTopY[x]);
+      lensBottomY = Math.max(lensBottomY, colBotY[x]);
+    }
+  }
+  const lensHeight = Math.max(16, lensBottomY - lensTopY + 1);
+
+  // ANSI Z80 standard: pupil line is ~38% down the lens aperture
+  const opticalPupilY = lensTopY + lensHeight * 0.38;
   const bridgeY = (colCenterY[peakLeftX] + colCenterY[peakRightX]) * 0.5;
-  const bridgeTopY = lensTopY;
-
-  // In optical science / ANSI Z80 eyewear standard:
-  // The wearer's pupils sit approximately 38% to 42% down the vertical lens height from the top rim.
-  const opticalPupilY = lensTopY + lensHeight * 0.40;
-
   const measuredRoll = Math.atan2(colCenterY[peakRightX] - colCenterY[peakLeftX], lensSpan);
   const roll = Math.abs(measuredRoll) < 0.35 ? measuredRoll : 0;
 
   return {
-    fullBounds: { left: minX, top: minY, right: maxX, bottom: maxY, width: maxX - minX + 1, height: maxY - minY + 1 },
-    lensBounds: { left: lensMinX, top: lensTopY, right: lensMaxX, bottom: lensBottomY, width: frontWidth, height: lensHeight },
+    fullBounds: { left: 0, top: 0, right: width - 1, bottom: height - 1, width, height },
+    lensBounds: { left: frontMinX, top: lensTopY, right: frontMaxX, bottom: lensBottomY, width: frontWidth, height: lensHeight },
     peakLeft: { x: peakLeftX, y: colCenterY[peakLeftX] },
     peakRight: { x: peakRightX, y: colCenterY[peakRightX] },
     bridge: { x: bridgeX, y: bridgeY },
     opticalPupilY,
-    bridgeTopY,
+    bridgeTopY: lensTopY,
     frontWidth,
     lensSpan,
     roll,
@@ -302,12 +342,8 @@ function compositeCustomFrame(
   height: number,
   adjustments?: FitAdjustments
 ) {
-  const frameCanvas = document.createElement('canvas');
-  frameCanvas.width = frame.naturalWidth;
-  frameCanvas.height = frame.naturalHeight;
-  const fCtx = frameCanvas.getContext('2d', { willReadFrequently: true })!;
-  fCtx.drawImage(frame, 0, 0);
-
+  // Always clean background, cavities, and reflections from the frame
+  const frameCanvas = prepareCustomFrame(frame);
   const geom = analyzeEyewearGeometry(frameCanvas);
 
   // 1. Precise anatomical eye landmarks
@@ -353,24 +389,45 @@ function compositeCustomFrame(
   const userRotate = ((adjustments?.rotate ?? 0) * Math.PI) / 180;
 
   // 2. Optical scale calculation:
-  // Sunglasses frame front spans across the temporal face (typical ratio 2.15x IPD or 0.98x faceWidth)
-  const targetFrontWidth = Math.max(eyeSpan * 2.15, faceWidth * 0.98);
+  // Sunglasses frame front spans across the temporal face (typical ratio 2.10x IPD or 0.98x faceWidth)
+  const targetFrontWidth = Math.max(eyeSpan * 2.10, faceWidth * 0.98);
   const targetLensSpan = eyeSpan * 1.08;
   const scaleFromFront = targetFrontWidth / Math.max(20, geom.frontWidth);
   const scaleFromSpan = targetLensSpan / Math.max(16, geom.lensSpan);
-  const baseScale = geom.frontWidth > 0 ? (scaleFromFront * 0.60 + scaleFromSpan * 0.40) : scaleFromSpan;
+  let baseScale = geom.frontWidth > 0 ? (scaleFromFront * 0.55 + scaleFromSpan * 0.45) : scaleFromSpan;
+
+  // Protective anatomical clamp: sunglass lens height must not exceed 80% of interpupillary distance
+  const maxAllowedLensH = eyeSpan * 0.80;
+  if (geom.lensBounds.height * baseScale > maxAllowedLensH) {
+    baseScale = maxAllowedLensH / geom.lensBounds.height;
+  }
   const scale = baseScale * userScale;
 
   // 3. Anatomical Anchor:
   // Horizontally: centered on nasal midline between eyes
   const anchorX = pupilCenter.x * 0.60 + noseRadix.x * 0.40 + userOffsetX;
-  // Vertically: align optical pupil line directly with wearer's pupils,
-  // with subtle anchor pull to ensure bridge rests comfortably on radix (168)
-  const anchorY = pupilCenter.y * 0.85 + (noseRadix.y + (geom.opticalPupilY - geom.bridgeTopY) * scale) * 0.15 + userOffsetY;
+  // Vertically: align optical pupil line directly with wearer's pupils
+  const anchorY = pupilCenter.y * 0.90 + noseRadix.y * 0.10 + userOffsetY;
 
   const totalRotation = faceRoll - geom.roll + userRotate;
 
-  // 4. Composite onto output canvas
+  // 4. Soft-fade asymmetrical trailing temple arm beyond front frame
+  const fCtx = frameCanvas.getContext('2d')!;
+  if (geom.lensBounds.right < frameCanvas.width - 5) {
+    const fPixels = fCtx.getImageData(0, 0, frameCanvas.width, frameCanvas.height);
+    const fData = fPixels.data;
+    const rBoundary = geom.lensBounds.right;
+    for (let y = 0; y < frameCanvas.height; y++) {
+      for (let x = rBoundary; x < frameCanvas.width; x++) {
+        const idx = (y * frameCanvas.width + x) * 4;
+        const fade = Math.max(0, 1 - (x - rBoundary) / 12);
+        fData[idx + 3] = Math.round(fData[idx + 3] * fade);
+      }
+    }
+    fCtx.putImageData(fPixels, 0, 0);
+  }
+
+  // 5. Composite onto output canvas
   const composite = document.createElement('canvas');
   composite.width = width;
   composite.height = height;
@@ -384,7 +441,7 @@ function compositeCustomFrame(
   ctx.rotate(totalRotation);
   ctx.scale(scale * yawWidthScale, scale);
 
-  // 5. Draw the authentic eyewear frame with subtle natural contact shadow
+  // 6. Draw the authentic eyewear frame with subtle natural contact shadow
   ctx.save();
   ctx.shadowColor = 'rgba(15, 10, 22, 0.18)';
   ctx.shadowBlur = Math.max(2, Math.min(6, (eyeSpan / scale) * 0.025));
