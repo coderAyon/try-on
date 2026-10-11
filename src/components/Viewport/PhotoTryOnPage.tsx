@@ -90,9 +90,13 @@ function prepareCustomFrame(image: HTMLImageElement): HTMLCanvasElement {
 
 interface EyewearGeometry {
   fullBounds: { left: number; top: number; right: number; bottom: number; width: number; height: number };
+  lensBounds: { left: number; top: number; right: number; bottom: number; width: number; height: number };
   peakLeft: { x: number; y: number };
   peakRight: { x: number; y: number };
   bridge: { x: number; y: number };
+  opticalPupilY: number;
+  bridgeTopY: number;
+  frontWidth: number;
   lensSpan: number;
   roll: number;
 }
@@ -123,7 +127,10 @@ function analyzeEyewearGeometry(canvas: HTMLCanvasElement): EyewearGeometry {
   // Column vertical spans and area counts
   const colSpan = new Int32Array(width);
   const colCount = new Int32Array(width);
+  const colTopY = new Int32Array(width).fill(-1);
+  const colBotY = new Int32Array(width).fill(-1);
   const colCenterY = new Float32Array(width);
+  let maxColSpan = 0;
 
   for (let x = minX; x <= maxX; x++) {
     let topY = -1, botY = -1, count = 0;
@@ -135,33 +142,39 @@ function analyzeEyewearGeometry(canvas: HTMLCanvasElement): EyewearGeometry {
       }
     }
     if (topY >= 0) {
+      colTopY[x] = topY;
+      colBotY[x] = botY;
       colSpan[x] = botY - topY + 1;
       colCount[x] = count;
       colCenterY[x] = (topY + botY) * 0.5;
+      if (colSpan[x] > maxColSpan) maxColSpan = colSpan[x];
     }
   }
 
-  let maxColSpan = 0;
-  for (let x = minX; x <= maxX; x++) {
-    if (colSpan[x] > maxColSpan) maxColSpan = colSpan[x];
-  }
-
-  // Dense lens threshold: temple arms are thin (< 35% of max lens height)
-  // This isolates the two main lenses from any extending side arms.
-  const lensHeightThreshold = Math.max(12, maxColSpan * 0.35);
+  // Dense lens threshold: temple arms are thin (< 32% of max lens height)
+  // This cleanly isolates the two main lenses from any extending side arms.
+  const lensHeightThreshold = Math.max(12, maxColSpan * 0.32);
   let lensMinX = maxX, lensMaxX = minX;
+  let lensTopY = height, lensBottomY = 0;
+
   for (let x = minX; x <= maxX; x++) {
     if (colSpan[x] >= lensHeightThreshold) {
       lensMinX = Math.min(lensMinX, x);
       lensMaxX = Math.max(lensMaxX, x);
+      lensTopY = Math.min(lensTopY, colTopY[x]);
+      lensBottomY = Math.max(lensBottomY, colBotY[x]);
     }
   }
 
-  if (lensMaxX <= lensMinX) {
+  if (lensMaxX <= lensMinX || lensBottomY <= lensTopY) {
     lensMinX = minX;
     lensMaxX = maxX;
+    lensTopY = minY;
+    lensBottomY = maxY;
   }
 
+  const lensHeight = Math.max(16, lensBottomY - lensTopY + 1);
+  const frontWidth = Math.max(20, lensMaxX - lensMinX + 1);
   const lensMidX = Math.round((lensMinX + lensMaxX) * 0.5);
 
   // Smooth spans (weighted so dense lens columns dominate over thin temple arms)
@@ -198,14 +211,24 @@ function analyzeEyewearGeometry(canvas: HTMLCanvasElement): EyewearGeometry {
   const lensSpan = Math.max(20, peakRightX - peakLeftX);
   const bridgeX = (peakLeftX + peakRightX) * 0.5;
   const bridgeY = (colCenterY[peakLeftX] + colCenterY[peakRightX]) * 0.5;
+  const bridgeTopY = lensTopY;
+
+  // In optical science / ANSI Z80 eyewear standard:
+  // The wearer's pupils sit approximately 38% to 42% down the vertical lens height from the top rim.
+  const opticalPupilY = lensTopY + lensHeight * 0.40;
+
   const measuredRoll = Math.atan2(colCenterY[peakRightX] - colCenterY[peakLeftX], lensSpan);
   const roll = Math.abs(measuredRoll) < 0.35 ? measuredRoll : 0;
 
   return {
     fullBounds: { left: minX, top: minY, right: maxX, bottom: maxY, width: maxX - minX + 1, height: maxY - minY + 1 },
+    lensBounds: { left: lensMinX, top: lensTopY, right: lensMaxX, bottom: lensBottomY, width: frontWidth, height: lensHeight },
     peakLeft: { x: peakLeftX, y: colCenterY[peakLeftX] },
     peakRight: { x: peakRightX, y: colCenterY[peakRightX] },
     bridge: { x: bridgeX, y: bridgeY },
+    opticalPupilY,
+    bridgeTopY,
+    frontWidth,
     lensSpan,
     roll,
   };
@@ -222,9 +245,9 @@ function straightenCustomEyewear(canvas: HTMLCanvasElement): HTMLCanvasElement {
   const outCtx = out.getContext('2d')!;
   outCtx.imageSmoothingEnabled = true;
   outCtx.imageSmoothingQuality = 'high';
-  outCtx.translate(geom.bridge.x, geom.bridge.y);
+  outCtx.translate(geom.bridge.x, geom.opticalPupilY);
   outCtx.rotate(-geom.roll);
-  outCtx.translate(-geom.bridge.x, -geom.bridge.y);
+  outCtx.translate(-geom.bridge.x, -geom.opticalPupilY);
   outCtx.drawImage(canvas, 0, 0);
   return out;
 }
@@ -287,36 +310,67 @@ function compositeCustomFrame(
 
   const geom = analyzeEyewearGeometry(frameCanvas);
 
-  // Measure facial landmarks in pixel coordinates
-  const eyePoint = (a: number, b: number) => ({
-    x: (points[a].x + points[b].x) * 0.5 * width,
-    y: (points[a].y + points[b].y) * 0.5 * height,
-  });
-  const rightEye = eyePoint(33, 133); // Subject's right eye (viewer's left)
-  const leftEye = eyePoint(263, 362); // Subject's left eye (viewer's right)
+  // 1. Precise anatomical eye landmarks
+  // Right eye (viewer's left): horizontal midpoint (33, 133), vertical midpoint (159, 145)
+  const pupilRight = {
+    x: (points[33].x + points[133].x) * 0.5 * width,
+    y: (points[159].y + points[145].y) * 0.5 * height,
+  };
+  // Left eye (viewer's right): horizontal midpoint (263, 362), vertical midpoint (386, 374)
+  const pupilLeft = {
+    x: (points[263].x + points[362].x) * 0.5 * width,
+    y: (points[386].y + points[374].y) * 0.5 * height,
+  };
 
-  const eyeSpan = Math.hypot(leftEye.x - rightEye.x, leftEye.y - rightEye.y);
+  const eyeSpan = Math.hypot(pupilLeft.x - pupilRight.x, pupilLeft.y - pupilRight.y);
   if (eyeSpan < 8) throw Error('Could not measure eye positions on this face.');
 
-  const faceRoll = Math.atan2(leftEye.y - rightEye.y, leftEye.x - rightEye.x);
+  const pupilCenter = {
+    x: (pupilRight.x + pupilLeft.x) * 0.5,
+    y: (pupilRight.y + pupilLeft.y) * 0.5,
+  };
 
-  const noseBridge = { x: points[168].x * width, y: points[168].y * height };
-  const eyeCenter = { x: (rightEye.x + leftEye.x) * 0.5, y: (rightEye.y + leftEye.y) * 0.5 };
+  // Nasal saddle (radix, landmark 168)
+  const noseRadix = { x: points[168].x * width, y: points[168].y * height };
 
+  // Temporal face width (landmarks 234 to 454)
+  const faceWidth = Math.hypot((points[454].x - points[234].x) * width, (points[454].y - points[234].y) * height);
+
+  // Face roll
+  const faceRoll = Math.atan2(pupilLeft.y - pupilRight.y, pupilLeft.x - pupilRight.x);
+
+  // Head yaw perspective estimation
+  const dRight = Math.hypot(points[168].x - points[234].x, points[168].y - points[234].y);
+  const dLeft = Math.hypot(points[454].x - points[168].x, points[454].y - points[168].y);
+  const yawRatio = (dRight + dLeft) > 0 ? (dRight - dLeft) / (dRight + dLeft) : 0;
+  const yawAngle = Math.asin(Math.max(-0.5, Math.min(0.5, yawRatio * 1.5)));
+  const yawWidthScale = Math.cos(yawAngle);
+
+  // User adjustments
   const userScale = adjustments?.scale ?? 1.0;
   const userOffsetX = adjustments?.offsetX ?? 0;
   const userOffsetY = adjustments?.offsetY ?? 0;
   const userRotate = ((adjustments?.rotate ?? 0) * Math.PI) / 180;
 
-  // Eyewear scale: lens-to-lens peak distance directly aligns with eye pupils
-  const scale = (eyeSpan / Math.max(16, geom.lensSpan)) * userScale;
+  // 2. Optical scale calculation:
+  // Sunglasses frame front spans across the temporal face (typical ratio 2.15x IPD or 0.98x faceWidth)
+  const targetFrontWidth = Math.max(eyeSpan * 2.15, faceWidth * 0.98);
+  const targetLensSpan = eyeSpan * 1.08;
+  const scaleFromFront = targetFrontWidth / Math.max(20, geom.frontWidth);
+  const scaleFromSpan = targetLensSpan / Math.max(16, geom.lensSpan);
+  const baseScale = geom.frontWidth > 0 ? (scaleFromFront * 0.60 + scaleFromSpan * 0.40) : scaleFromSpan;
+  const scale = baseScale * userScale;
 
-  // Anatomical anchor: centered horizontally between pupils, resting on nasal saddle
-  const anchorX = eyeCenter.x * 0.60 + noseBridge.x * 0.40 + userOffsetX;
-  const anchorY = eyeCenter.y * 0.65 + noseBridge.y * 0.35 + userOffsetY;
+  // 3. Anatomical Anchor:
+  // Horizontally: centered on nasal midline between eyes
+  const anchorX = pupilCenter.x * 0.60 + noseRadix.x * 0.40 + userOffsetX;
+  // Vertically: align optical pupil line directly with wearer's pupils,
+  // with subtle anchor pull to ensure bridge rests comfortably on radix (168)
+  const anchorY = pupilCenter.y * 0.85 + (noseRadix.y + (geom.opticalPupilY - geom.bridgeTopY) * scale) * 0.15 + userOffsetY;
 
   const totalRotation = faceRoll - geom.roll + userRotate;
 
+  // 4. Composite onto output canvas
   const composite = document.createElement('canvas');
   composite.width = width;
   composite.height = height;
@@ -328,15 +382,16 @@ function compositeCustomFrame(
   ctx.save();
   ctx.translate(anchorX, anchorY);
   ctx.rotate(totalRotation);
-  ctx.scale(scale, scale);
+  ctx.scale(scale * yawWidthScale, scale);
 
-  // Soft natural shadow on face skin
-  ctx.shadowColor = 'rgba(15, 10, 22, 0.32)';
-  ctx.shadowBlur = Math.max(3, (eyeSpan / scale) * 0.08);
-  ctx.shadowOffsetY = (eyeSpan / scale) * 0.035;
-
-  // Draw full frame centered around the detected bridge
-  ctx.drawImage(frameCanvas, -geom.bridge.x, -geom.bridge.y);
+  // 5. Draw the authentic eyewear frame with subtle natural contact shadow
+  ctx.save();
+  ctx.shadowColor = 'rgba(15, 10, 22, 0.18)';
+  ctx.shadowBlur = Math.max(2, Math.min(6, (eyeSpan / scale) * 0.025));
+  ctx.shadowOffsetY = Math.max(1, Math.min(3, (eyeSpan / scale) * 0.012));
+  ctx.shadowOffsetX = 0;
+  ctx.drawImage(frameCanvas, -geom.bridge.x, -geom.opticalPupilY);
+  ctx.restore();
 
   ctx.restore();
   return composite;
@@ -361,7 +416,7 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [variant, setVariant] = useState(0);
-  const [split, setSplit] = useState(50);
+  const [split, setSplit] = useState(0);
   const [zoom, setZoom] = useState(1);
   const [dragging, setDragging] = useState(false);
   const [activeInputTab, setActiveInputTab] = useState<'upload' | 'url' | 'models'>('upload');
@@ -781,6 +836,7 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
           setFaceCropResult(outputs.fitted);
           setFaceCropOriginal(outputs.original);
           setViewMode('full');
+          setSplit(0);
         }
         return;
       }
