@@ -53,78 +53,79 @@ async function runCloudflareImageEdit(image: string, prompt: string) {
   throw Error('Cloudflare Workers AI returned no edited image.');
 }
 
-router.post('/prepare-portrait', async (req, res) => {
-  const cloudflareConfigured = Boolean(process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_API_TOKEN);
-  const key = process.env.OPENAI_API_KEY;
-  if (!cloudflareConfigured && !key) {
-    res.status(503).json({ error: 'AI photo preparation needs CLOUDFLARE_ACCOUNT_ID plus CLOUDFLARE_API_TOKEN, or a server-side OPENAI_API_KEY. The local face fitter is still available.' });
-    return;
-  }
-  const image = req.body?.image;
-  const match = typeof image === 'string'
-    ? /^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/=]+)$/.exec(image)
-    : null;
-  if (!match || image.length > 28_000_000) {
-    res.status(400).json({ error: 'Provide a PNG, JPG or WebP portrait smaller than 20 MB.' });
-    return;
-  }
-  const [, format, encoded] = match;
-  const bytes = Buffer.from(encoded, 'base64');
-  if (!bytes.length || bytes.length > 20 * 1024 * 1024) {
-    res.status(400).json({ error: 'Provide a PNG, JPG or WebP portrait smaller than 20 MB.' });
-    return;
-  }
-  try {
-    if (cloudflareConfigured) {
-      const prompt = [
-        'Conservatively improve this exact portrait for face landmark detection and virtual eyewear fitting.',
-        'Preserve the same person, identity, facial geometry, pose, camera angle, expression, crop, aspect ratio, background, hair and clothing.',
-        'Only make subtle exposure, white-balance, noise and sharpness corrections. Do not rotate the head, reconstruct hidden facial areas, beautify, or add eyewear.',
-      ].join(' ');
-      const output = await runCloudflareImageEdit(image, prompt);
-      res.json({ image: output });
-      return;
-    }
-    const form = new FormData();
-    const mime = `image/${format}`;
-    const extension = format === 'jpeg' ? 'jpg' : format;
-    form.append('model', process.env.OPENAI_IMAGE_MODEL || 'gpt-image-1.5');
-    form.append('image', new Blob([bytes], { type: mime }), `portrait.${extension}`);
-    form.append('prompt', [
-      'Prepare this exact uploaded photograph for a virtual eyewear try-on.',
-      'Keep the same person and preserve their identity, facial proportions, skin tone, expression, age, hair, visible facial features, camera viewpoint, head pose, clothing, and background.',
-      'Make only conservative photo corrections that improve face-landmark detection: correct image orientation, natural exposure and white balance, mild noise reduction, and mild sharpness.',
-      'Do not turn the head to face forward, invent or reconstruct hidden facial features, alter the face, beautify, change the crop or perspective, add eyewear, or remove visible facial features.',
-      'Return one realistic photograph with the same composition and aspect ratio. If a requested correction cannot be made without changing the person or viewpoint, preserve the input as closely as possible.',
-    ].join(' '));
-    form.append('quality', 'high');
-    form.append('size', 'auto');
-    form.append('input_fidelity', 'high');
-    form.append('output_format', 'png');
-    const response = await fetch('https://api.openai.com/v1/images/edits', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${key}` },
-      body: form,
-      signal: AbortSignal.timeout(170000),
-    });
-    const data = await response.json().catch(() => ({})) as { data?: { b64_json?: string }[] };
-    if (!response.ok || !data.data?.[0]?.b64_json) {
-      res.status(502).json({ error: 'AI could not safely prepare this portrait. The original photo remains available for local fitting.' });
-      return;
-    }
-    res.json({ image: `data:image/png;base64,${data.data[0].b64_json}` });
-  } catch {
-    res.status(502).json({ error: 'AI photo preparation timed out or could not connect. The original photo remains available.' });
-  }
+router.post('/prepare-portrait', (_req, res) => {
+  res.status(410).json({ error: 'Portrait generation is disabled. Photo try-on preserves the original image and overlays eyewear locally.' });
 });
+
+export async function processAndStraightenFrame(inputBuffer: Buffer): Promise<Buffer> {
+  const image = sharp(inputBuffer).ensureAlpha();
+  const { data, info } = await image.raw().toBuffer({ resolveWithObject: true });
+  const { width, height, channels } = info;
+
+  // 1. Detect Alpha Bounding Box
+  let minX = width, minY = height, maxX = 0, maxY = 0;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = (y * width + x) * channels;
+      const alpha = data[idx + 3];
+      if (alpha > 20) {
+        minX = Math.min(minX, x);
+        maxX = Math.max(maxX, x);
+        minY = Math.min(minY, y);
+        maxY = Math.max(maxY, y);
+      }
+    }
+  }
+
+  if (maxX <= minX || maxY <= minY) {
+    return sharp(inputBuffer).png().toBuffer();
+  }
+
+  const fullW = maxX - minX + 1;
+  const fullH = maxY - minY + 1;
+  const midX = (minX + maxX) * 0.5;
+
+  // 2. Measure roll tilt between left lens mass and right lens mass
+  let leftMass = 0, leftYMass = 0;
+  let rightMass = 0, rightYMass = 0;
+
+  for (let y = minY; y <= maxY; y++) {
+    for (let x = minX; x <= maxX; x++) {
+      const a = data[(y * width + x) * channels + 3];
+      if (a > 20) {
+        if (x < midX) {
+          leftMass += a;
+          leftYMass += y * a;
+        } else {
+          rightMass += a;
+          rightYMass += y * a;
+        }
+      }
+    }
+  }
+
+  const leftY = leftMass > 0 ? leftYMass / leftMass : (minY + maxY) * 0.5;
+  const rightY = rightMass > 0 ? rightYMass / rightMass : (minY + maxY) * 0.5;
+  const roll = Math.atan2(rightY - leftY, fullW * 0.5);
+
+  // If tilted by more than ~1 degree, rotate to level
+  if (Math.abs(roll) > 0.018 && Math.abs(roll) < 0.35) {
+    const angleDeg = (-roll * 180) / Math.PI;
+    const rotated = await sharp(inputBuffer)
+      .rotate(angleDeg, { background: { r: 0, g: 0, b: 0, alpha: 0 } })
+      .png()
+      .toBuffer();
+    return sharp(rotated).trim().png().toBuffer();
+  }
+
+  // Otherwise return cleanly trimmed original frame
+  return sharp(inputBuffer)
+    .extract({ left: minX, top: minY, width: fullW, height: fullH })
+    .png()
+    .toBuffer();
+}
 
 router.post('/normalize-frame', async (req, res) => {
-  const cloudflareConfigured = Boolean(process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_API_TOKEN);
-  const key = process.env.OPENAI_API_KEY;
-  if (!key && !cloudflareConfigured) {
-    res.status(503).json({ error: 'AI front-view needs Cloudflare Workers AI credentials or a server-side OPENAI_API_KEY. The original frame image is still available.' });
-    return;
-  }
   const image = req.body?.image;
   const match = typeof image === 'string'
     ? /^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/=]+)$/.exec(image)
@@ -139,72 +140,27 @@ router.post('/normalize-frame', async (req, res) => {
     res.status(400).json({ error: 'Provide a PNG, JPG or WebP sunglasses image smaller than 20 MB.' });
     return;
   }
+
   try {
-    if (cloudflareConfigured) {
-      const prompt = [
-        'Create a clean product image of the exact sunglasses shown in this input, viewed straight-on from the front at eye level.',
-        'Preserve the exact frame category, lens outlines, bridge width, rim thickness, tint, colors, materials and proportions; do not square off rounded lenses, change the frame style, or redesign details.',
-        'Show both lenses symmetrically, with the front frame centered and level. Temple arms must stay behind the front frame and must never cross the lenses or forehead; hide them if necessary.',
-        'If the input is already front-facing, preserve its geometry and appearance and only cleanly isolate it. If it is photographed from above, below or the side, make a natural frontal product view without adding unrelated parts.',
-        'Use a perfectly plain white background with no gradients, pattern, text, person, extra objects or detached shadow. Show one complete pair of sunglasses only.',
-      ].join(' ');
-      const output = await runCloudflareImageEdit(image, prompt);
-      res.json({ image: output });
-      return;
+    // 1. Process and straighten via local computer vision engine
+    const processed = await processAndStraightenFrame(bytes);
+    const resultBase64 = `data:image/png;base64,${processed.toString('base64')}`;
+    res.json({ image: resultBase64 });
+  } catch (err: any) {
+    // Fallback: return trimmed original PNG
+    try {
+      const fallback = await sharp(bytes).png().toBuffer();
+      res.json({ image: `data:image/png;base64,${fallback.toString('base64')}` });
+    } catch {
+      res.status(500).json({ error: 'Failed to process sunglasses image: ' + (err?.message || 'unknown') });
     }
-    const form = new FormData();
-    const mime = `image/${format}`;
-    const extension = format === 'jpeg' ? 'jpg' : format;
-    form.append('model', process.env.OPENAI_IMAGE_MODEL || 'gpt-image-1.5');
-    form.append('image', new Blob([bytes], { type: mime }), `sunglasses.${extension}`);
-    form.append('prompt', [
-      'Prepare the exact sunglasses in this input image for a virtual try-on.',
-      'Create a clean, straight-on, front-facing orthographic catalog view, with the full left and right lenses, bridge, hinges, and both visible temple arms centered and level.',
-      'If the input is already front-facing, preserve its existing geometry and only isolate the product cleanly.',
-      'If it is photographed from the side, above, or at an angle, rotate the viewpoint to a natural frontal view and reconstruct only the hidden parts needed to show the complete pair.',
-      'Preserve the recognizable frame silhouette, lens shape and tint, materials, colors, proportions, and visible brand details as closely as possible.',
-      'Remove the background completely and output only the complete sunglasses on transparency. Do not include fragments, duplicate parts, a face, text, shadows detached from the frame, or extra objects.',
-      'This is an eyewear product asset, not a person wearing glasses.',
-    ].join(' '));
-    form.append('quality', 'high');
-    form.append('size', 'auto');
-    form.append('input_fidelity', 'high');
-    form.append('background', 'transparent');
-    form.append('output_format', 'png');
-    const response = await fetch('https://api.openai.com/v1/images/edits', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${key}` },
-      body: form,
-      signal: AbortSignal.timeout(170000),
-    });
-    const data = await response.json().catch(() => ({})) as { data?: { b64_json?: string }[] };
-    if (!response.ok || !data.data?.[0]?.b64_json) {
-      res.status(502).json({ error: 'AI could not create a clean front view from this angle. Try a clearer product image or a front-facing shot.' });
-      return;
-    }
-    res.json({ image: `data:image/png;base64,${data.data[0].b64_json}` });
-  } catch {
-    res.status(502).json({ error: 'AI front-view timed out or could not connect. Your original image remains available.' });
   }
 });
 
-router.post('/enhance', async (req, res) => {
-  const key = process.env.OPENAI_API_KEY;
-  if (!key) { res.status(503).json({ error: 'AI enhancement needs a server-side OPENAI_API_KEY. Your high-resolution fitted image remains available.' }); return; }
-  const image = req.body?.image;
-  if (typeof image !== 'string' || !/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(image) || image.length > 35_000_000) { res.status(400).json({ error: 'Provide a PNG image smaller than 25 MB.' }); return; }
-  try {
-    const form = new FormData();
-    form.append('model', process.env.OPENAI_IMAGE_MODEL || 'gpt-image-1.5');
-    form.append('image', new Blob([Buffer.from(image.split(',')[1], 'base64')], { type: 'image/png' }), 'fitted.png');
-    form.append('prompt', 'Enhance this eyewear try-on photograph with natural sharp detail and realistic lens reflections. Preserve the exact person, facial identity, expression, frame design, frame position, colors, clothing, background, composition and aspect ratio. Reduce blur without adding text or new objects.');
-    form.append('quality', 'high'); form.append('size', 'auto'); form.append('input_fidelity', 'high');
-    const response = await fetch('https://api.openai.com/v1/images/edits', { method: 'POST', headers: { Authorization: `Bearer ${key}` }, body: form, signal: AbortSignal.timeout(170000) });
-    const data = await response.json() as { data?: { b64_json?: string }[] };
-    if (!response.ok || !data.data?.[0]?.b64_json) { res.status(502).json({ error: 'AI provider could not enhance this image. Check server model access, credentials and billing.' }); return; }
-    res.json({ image: `data:image/png;base64,${data.data[0].b64_json}` });
-  } catch { res.status(502).json({ error: 'AI enhancement timed out or could not connect. Your fitted image is still available.' }); }
+router.post('/enhance', (_req, res) => {
+  res.status(410).json({ error: 'Portrait generation is disabled. Photo try-on preserves the original image and overlays eyewear locally.' });
 });
+
 router.get('/proxy', async (req, res) => {
   const imageUrl = req.query.url;
   if (!imageUrl || typeof imageUrl !== 'string') {
