@@ -37,95 +37,54 @@ function createContactShadowTexture(): THREE.CanvasTexture {
   return tex;
 }
 
-function prepareCustomFrame(image: HTMLImageElement): HTMLCanvasElement {
-  const scale = Math.min(1, 1400 / Math.max(image.naturalWidth, image.naturalHeight));
-  const rawCanvas = document.createElement('canvas');
-  rawCanvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
-  rawCanvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
-  const rCtx = rawCanvas.getContext('2d', { willReadFrequently: true });
-  if (!rCtx) throw Error('Custom frame preview is unavailable.');
-  rCtx.drawImage(image, 0, 0, rawCanvas.width, rawCanvas.height);
+function createFrameProcessingCanvas(image: HTMLImageElement): HTMLCanvasElement {
+  // Keep the hosted segmentation request bounded while retaining source detail.
+  const scale = Math.min(1, 1600 / Math.max(image.naturalWidth, image.naturalHeight));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+  canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+  const context = canvas.getContext('2d');
+  if (!context) throw Error('Could not read the sunglasses image.');
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  return canvas;
+}
 
-  const { width: w, height: h } = rawCanvas;
-  const pixels = rCtx.getImageData(0, 0, w, h);
-  const { data } = pixels;
-
-  // 1. Detect background color from outer corners
-  const corners = [[0, 0], [w - 1, 0], [0, h - 1], [w - 1, h - 1]]
-    .map(([x, y]) => ((y * w + x) * 4));
-  const background = [0, 1, 2].map(channel => Math.round(corners.reduce((sum, i) => sum + data[i + channel], 0) / 4));
-  const isLightBg = (background[0] + background[1] + background[2]) / 3 > 215;
-
-  // 2. Flood fill connected outer background from perimeter edges
-  const visited = new Uint8Array(w * h);
-  const queue = new Uint32Array(w * h);
-  let head = 0, tail = 0;
-  const add = (index: number) => {
-    if (visited[index]) return;
-    const pixel = index * 4;
-    const distance = Math.abs(data[pixel] - background[0]) + Math.abs(data[pixel + 1] - background[1]) + Math.abs(data[pixel + 2] - background[2]);
-    if (distance > 80 && (data[pixel + 3] < 20 || !isLightBg)) return;
-    visited[index] = 1; queue[tail++] = index;
-  };
-  for (let x = 0; x < w; x++) { add(x); add((h - 1) * w + x); }
-  for (let y = 0; y < h; y++) { add(y * w); add(y * w + w - 1); }
-  while (head < tail) {
-    const index = queue[head++];
-    const x = index % w, y = Math.floor(index / w);
-    data[index * 4 + 3] = 0;
-    if (x > 0) add(index - 1);
-    if (x + 1 < w) add(index + 1);
-    if (y > 0) add(index - w);
-    if (y + 1 < h) add(index + w);
+function canvasHasTransparentPixels(canvas: HTMLCanvasElement): boolean {
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (!context) throw Error('Could not inspect the sunglasses image.');
+  const { data } = context.getImageData(0, 0, canvas.width, canvas.height);
+  const stride = Math.max(1, Math.floor(Math.sqrt((canvas.width * canvas.height) / 120_000)));
+  for (let y = 0; y < canvas.height; y += stride) for (let x = 0; x < canvas.width; x += stride) {
+    if (data[(y * canvas.width + x) * 4 + 3] < 245) return true;
   }
+  return false;
+}
 
-  // 3. Clear enclosed background cavities and diffuse tabletop ground reflections
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const idx = (y * w + x) * 4;
-      if (data[idx + 3] <= 20) continue;
-      const r = data[idx], g = data[idx + 1], b = data[idx + 2];
-      const sat = Math.max(r, g, b) - Math.min(r, g, b);
-      const avg = (r + g + b) / 3;
-
-      // Pure white or neutral light cavity fill (e.g. between double brow bar and nose bridge)
-      if (avg > 222 && sat < 22) {
-        data[idx + 3] = 0;
-      } else if (y > h * 0.55 && avg > 165 && sat < 22) {
-        // Tabletop ground reflection/shadow under bottom rim
-        data[idx + 3] = 0;
-      }
-    }
+function trimTransparentFrame(image: HTMLImageElement | HTMLCanvasElement): HTMLCanvasElement {
+  const width = image instanceof HTMLImageElement ? image.naturalWidth : image.width;
+  const height = image instanceof HTMLImageElement ? image.naturalHeight : image.height;
+  const canvas = document.createElement('canvas');
+  canvas.width = width; canvas.height = height;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) throw Error('Could not read the isolated sunglasses image.');
+  ctx.drawImage(image, 0, 0);
+  const { data } = ctx.getImageData(0, 0, width, height);
+  let minX = width, minY = height, maxX = -1, maxY = -1;
+  let transparentPixels = 0;
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    const alpha = data[(y * width + x) * 4 + 3];
+    if (alpha < 245) transparentPixels++;
+    if (alpha > 20) { minX = Math.min(minX, x); minY = Math.min(minY, y); maxX = Math.max(maxX, x); maxY = Math.max(maxY, y); }
   }
-
-  // 4. Tight crop to content bounding box
-  let minX = w, maxX = 0, minY = h, maxY = 0;
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      if (data[(y * w + x) * 4 + 3] > 20) {
-        minX = Math.min(minX, x); maxX = Math.max(maxX, x);
-        minY = Math.min(minY, y); maxY = Math.max(maxY, y);
-      }
-    }
+  if (maxX < minX || maxY < minY || transparentPixels === 0) {
+    throw Error('Background removal did not return a transparent cutout. Retry with a clearer sunglasses photo.');
   }
-
-  if (maxX <= minX || maxY <= minY) {
-    rCtx.putImageData(pixels, 0, 0);
-    return rawCanvas;
-  }
-
-  const cropW = maxX - minX + 1;
-  const cropH = maxY - minY + 1;
-  rCtx.putImageData(pixels, 0, 0);
-
+  const padding = Math.max(4, Math.round(Math.max(maxX - minX + 1, maxY - minY + 1) * 0.025));
+  const left = Math.max(0, minX - padding), top = Math.max(0, minY - padding);
+  const right = Math.min(width, maxX + padding + 1), bottom = Math.min(height, maxY + padding + 1);
   const cropped = document.createElement('canvas');
-  cropped.width = cropW;
-  cropped.height = cropH;
-  const cCtx = cropped.getContext('2d')!;
-  cCtx.imageSmoothingEnabled = true;
-  cCtx.imageSmoothingQuality = 'high';
-  cCtx.drawImage(rawCanvas, minX, minY, cropW, cropH, 0, 0, cropW, cropH);
-
+  cropped.width = right - left; cropped.height = bottom - top;
+  cropped.getContext('2d')!.drawImage(canvas, left, top, cropped.width, cropped.height, 0, 0, cropped.width, cropped.height);
   return cropped;
 }
 
@@ -187,29 +146,17 @@ function analyzeEyewearGeometry(canvas: HTMLCanvasElement): EyewearGeometry {
     smoothed[x] = sum / count;
   }
 
-  // Front frame boundaries: exclude thin trailing temple arms after significant gap or drop
-  let frontMinX = 0, frontMaxX = width - 1;
-  const gapThresh = Math.max(3, maxD * 0.12);
-  for (let x = Math.round(width * 0.40); x < width - 8; x++) {
-    if (density[x] <= gapThresh) {
-      let gapLen = 0;
-      while (x + gapLen < width && density[x + gapLen] <= gapThresh) gapLen++;
-      if (gapLen > Math.max(10, width * 0.07)) {
-        frontMaxX = x;
-        break;
-      }
-    }
+  // The uploaded product image has already been isolated and levelled.
+  // Use the actual visible-frame bounds: gaps between lenses and the bridge
+  // must never be mistaken for the outer edge of the frame.
+  let frontMinX = width, frontMaxX = 0, frameTop = height, frameBottom = 0;
+  for (let x = 0; x < width; x++) {
+    if (density[x] > 0) { frontMinX = Math.min(frontMinX, x); frontMaxX = Math.max(frontMaxX, x); }
   }
-  for (let x = Math.round(width * 0.60); x > 8; x--) {
-    if (density[x] <= gapThresh) {
-      let gapLen = 0;
-      while (x - gapLen >= 0 && density[x - gapLen] <= gapThresh) gapLen++;
-      if (gapLen > Math.max(10, width * 0.07)) {
-        frontMinX = x;
-        break;
-      }
-    }
+  for (let y = 0; y < height; y++) for (let x = frontMinX; x <= frontMaxX; x++) {
+    if (data[(y * width + x) * 4 + 3] > 20) { frameTop = Math.min(frameTop, y); frameBottom = Math.max(frameBottom, y); }
   }
+  if (frontMaxX <= frontMinX || frameBottom <= frameTop) throw Error('Could not find the full sunglasses frame.');
 
   const midX = (frontMinX + frontMaxX) * 0.5;
 
@@ -258,7 +205,7 @@ function analyzeEyewearGeometry(canvas: HTMLCanvasElement): EyewearGeometry {
   const opticalPupilY = lensTopY + lensHeight * 0.38;
   const bridgeY = (colCenterY[peakLeftX] + colCenterY[peakRightX]) * 0.5;
   const measuredRoll = Math.atan2(colCenterY[peakRightX] - colCenterY[peakLeftX], lensSpan);
-  const roll = Math.abs(measuredRoll) < 0.35 ? measuredRoll : 0;
+  const roll = measuredRoll;
 
   return {
     fullBounds: { left: 0, top: 0, right: width - 1, bottom: height - 1, width, height },
@@ -275,21 +222,76 @@ function analyzeEyewearGeometry(canvas: HTMLCanvasElement): EyewearGeometry {
 }
 
 function straightenCustomEyewear(canvas: HTMLCanvasElement): HTMLCanvasElement {
-  const geom = analyzeEyewearGeometry(canvas);
-  if (Math.abs(geom.roll) < 0.015) return canvas;
-
-  // Level the frame horizontally around the bridge center without cutting or mirroring
+  // Find the main axis of the visible frame before measuring the two lenses.
+  // Measuring vertical columns on a diagonal frame confuses lens height with
+  // the distance between lenses and incorrectly shrinks the whole frame.
+  const pixels = canvas.getContext('2d', { willReadFrequently: true })!.getImageData(0, 0, canvas.width, canvas.height).data;
+  let n = 0, sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0;
+  for (let y = 0; y < canvas.height; y += 2) for (let x = 0; x < canvas.width; x += 2) {
+    const weight = pixels[(y * canvas.width + x) * 4 + 3] / 255;
+    if (weight < 0.1) continue;
+    n += weight; sx += x * weight; sy += y * weight;
+    sxx += x * x * weight; syy += y * y * weight; sxy += x * y * weight;
+  }
+  if (!n) throw Error('No visible sunglasses found in this image.');
+  const cx = sx / n, cy = sy / n;
+  const angle = 0.5 * Math.atan2(2 * (sxy / n - cx * cy), (sxx / n - cx * cx) - (syy / n - cy * cy));
+  if (Math.abs(angle) < 0.015) return canvas;
+  const c = Math.abs(Math.cos(angle)), t = Math.abs(Math.sin(angle));
   const out = document.createElement('canvas');
-  out.width = canvas.width;
-  out.height = canvas.height;
-  const outCtx = out.getContext('2d')!;
-  outCtx.imageSmoothingEnabled = true;
-  outCtx.imageSmoothingQuality = 'high';
-  outCtx.translate(geom.bridge.x, geom.opticalPupilY);
-  outCtx.rotate(-geom.roll);
-  outCtx.translate(-geom.bridge.x, -geom.opticalPupilY);
-  outCtx.drawImage(canvas, 0, 0);
+  out.width = Math.ceil(canvas.width * c + canvas.height * t);
+  out.height = Math.ceil(canvas.width * t + canvas.height * c);
+  const ctx = out.getContext('2d')!;
+  ctx.translate(out.width / 2, out.height / 2);
+  ctx.rotate(-angle);
+  ctx.drawImage(canvas, -canvas.width / 2, -canvas.height / 2);
   return out;
+}
+
+async function processCustomFrameWithHostedAI(
+  image: HTMLImageElement,
+  onProgress: (message: string) => void = () => undefined,
+): Promise<HTMLCanvasElement> {
+  const source = createFrameProcessingCanvas(image);
+
+  // Transparent product PNGs already contain a useful mask. Keep every
+  // original pixel and avoid running segmentation over a good cutout.
+  if (canvasHasTransparentPixels(source)) {
+    return straightenCustomEyewear(trimTransparentFrame(source));
+  }
+
+  onProgress('Preparing sunglasses for free Hugging Face ZeroGPU…');
+  const input = await new Promise<Blob>((resolve, reject) => {
+    source.toBlob(blob => blob ? resolve(blob) : reject(Error('Could not prepare the sunglasses image.')), 'image/png');
+  });
+  try {
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => typeof reader.result === 'string' ? resolve(reader.result) : reject(Error('Could not encode the sunglasses image.'));
+      reader.onerror = () => reject(Error('Could not read the sunglasses image.'));
+      reader.readAsDataURL(input);
+    });
+    onProgress('Removing background with Bria ZeroGPU…');
+    const response = await fetch('/api/photo/normalize-frame', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: dataUrl, useAI: true }),
+      signal: AbortSignal.timeout(150_000),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw Error(payload.error || 'Hugging Face could not process this sunglasses image.');
+    if (typeof payload.image !== 'string' || !payload.image.startsWith('data:image/png;base64,')) {
+      throw Error('Hugging Face returned an invalid transparent image. Try again with a clearer product photo.');
+    }
+    const isolated = new Image();
+    isolated.src = payload.image;
+    await isolated.decode();
+    onProgress('Finishing the transparent frame cutout…');
+    return straightenCustomEyewear(trimTransparentFrame(isolated));
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : 'Unknown model error';
+    throw Error(`Bria ZeroGPU could not isolate this frame (${reason}). Retry with a clear, closer sunglasses photo.`);
+  }
 }
 
 function customFrameNeedsAngleCorrection(canvas: HTMLCanvasElement): boolean {
@@ -343,20 +345,20 @@ function compositeCustomFrame(
   adjustments?: FitAdjustments
 ) {
   // Always clean background, cavities, and reflections from the frame
-  const frameCanvas = prepareCustomFrame(frame);
+  const frameCanvas = straightenCustomEyewear(trimTransparentFrame(frame));
   const geom = analyzeEyewearGeometry(frameCanvas);
 
-  // 1. Precise anatomical eye landmarks
-  // Right eye (viewer's left): horizontal midpoint (33, 133), vertical midpoint (159, 145)
-  const pupilRight = {
-    x: (points[33].x + points[133].x) * 0.5 * width,
-    y: (points[159].y + points[145].y) * 0.5 * height,
+  // Prefer actual iris centers (MediaPipe's refined 478-point face mesh).
+  // Fall back to eye-contour centers for models returning only 468 points.
+  const landmarkCenter = (indices: number[], fallback: number[]) => {
+    const selected = indices.every(index => points[index]) ? indices : fallback;
+    return {
+      x: selected.reduce((sum, index) => sum + points[index].x, 0) / selected.length * width,
+      y: selected.reduce((sum, index) => sum + points[index].y, 0) / selected.length * height,
+    };
   };
-  // Left eye (viewer's right): horizontal midpoint (263, 362), vertical midpoint (386, 374)
-  const pupilLeft = {
-    x: (points[263].x + points[362].x) * 0.5 * width,
-    y: (points[386].y + points[374].y) * 0.5 * height,
-  };
+  const pupilRight = landmarkCenter([468, 469, 470, 471, 472], [33, 133, 159, 145]);
+  const pupilLeft = landmarkCenter([473, 474, 475, 476, 477], [263, 362, 386, 374]);
 
   const eyeSpan = Math.hypot(pupilLeft.x - pupilRight.x, pupilLeft.y - pupilRight.y);
   if (eyeSpan < 8) throw Error('Could not measure eye positions on this face.');
@@ -375,15 +377,23 @@ function compositeCustomFrame(
   // Face roll
   const faceRoll = Math.atan2(pupilLeft.y - pupilRight.y, pupilLeft.x - pupilRight.x);
 
-  // Head yaw perspective estimation
-  const dRight = Math.hypot(points[168].x - points[234].x, points[168].y - points[234].y);
-  const dLeft = Math.hypot(points[454].x - points[168].x, points[454].y - points[168].y);
+  // Estimate how much of each side of the face is visible. The eye points
+  // already encode the projected eye span, so applying another cosine to the
+  // whole frame makes glasses too narrow. Use the side ratios to foreshorten
+  // each lens independently instead.
+  const eyeAxisX = (pupilLeft.x - pupilRight.x) / eyeSpan;
+  const eyeAxisY = (pupilLeft.y - pupilRight.y) / eyeSpan;
+  const dRight = Math.abs((noseRadix.x - pupilRight.x) * eyeAxisX + (noseRadix.y - pupilRight.y) * eyeAxisY);
+  const dLeft = Math.abs((pupilLeft.x - noseRadix.x) * eyeAxisX + (pupilLeft.y - noseRadix.y) * eyeAxisY);
   const yawRatio = (dRight + dLeft) > 0 ? (dRight - dLeft) / (dRight + dLeft) : 0;
   const yawAngle = Math.asin(Math.max(-0.5, Math.min(0.5, yawRatio * 1.5)));
-  const yawWidthScale = Math.cos(yawAngle);
+  if (Math.abs(yawAngle) > 0.72) throw Error('This photo is too close to a side profile for a reliable two-eye fit. Try a front or three-quarter view.');
+  const depthMean = Math.max(1e-4, (dRight + dLeft) * 0.5);
+  const leftPerspective = Math.max(0.65, Math.min(1.25, dRight / depthMean));
+  const rightPerspective = Math.max(0.65, Math.min(1.25, dLeft / depthMean));
 
   // User adjustments
-  const userScale = adjustments?.scale ?? 1.0;
+  const userScale = adjustments?.scale ?? 1;
   const userOffsetX = adjustments?.offsetX ?? 0;
   const userOffsetY = adjustments?.offsetY ?? 0;
   const userRotate = ((adjustments?.rotate ?? 0) * Math.PI) / 180;
@@ -397,7 +407,7 @@ function compositeCustomFrame(
   let baseScale = geom.frontWidth > 0 ? (scaleFromFront * 0.55 + scaleFromSpan * 0.45) : scaleFromSpan;
 
   // Protective anatomical clamp: sunglass lens height must not exceed 80% of interpupillary distance
-  const maxAllowedLensH = eyeSpan * 0.80;
+  const maxAllowedLensH = eyeSpan * 1.05;
   if (geom.lensBounds.height * baseScale > maxAllowedLensH) {
     baseScale = maxAllowedLensH / geom.lensBounds.height;
   }
@@ -405,27 +415,12 @@ function compositeCustomFrame(
 
   // 3. Anatomical Anchor:
   // Horizontally: centered on nasal midline between eyes
-  const anchorX = pupilCenter.x * 0.60 + noseRadix.x * 0.40 + userOffsetX;
-  // Vertically: align optical pupil line directly with wearer's pupils
-  const anchorY = pupilCenter.y * 0.90 + noseRadix.y * 0.10 + userOffsetY;
+  const anchorX = pupilCenter.x * 0.82 + noseRadix.x * 0.18 + userOffsetX;
+  // The frame's optical line is aligned to the iris center; the nose root is
+  // only a small stabilizing reference so it cannot pull the frame upward.
+  const anchorY = pupilCenter.y * 0.96 + noseRadix.y * 0.04 + userOffsetY;
 
   const totalRotation = faceRoll - geom.roll + userRotate;
-
-  // 4. Soft-fade asymmetrical trailing temple arm beyond front frame
-  const fCtx = frameCanvas.getContext('2d')!;
-  if (geom.lensBounds.right < frameCanvas.width - 5) {
-    const fPixels = fCtx.getImageData(0, 0, frameCanvas.width, frameCanvas.height);
-    const fData = fPixels.data;
-    const rBoundary = geom.lensBounds.right;
-    for (let y = 0; y < frameCanvas.height; y++) {
-      for (let x = rBoundary; x < frameCanvas.width; x++) {
-        const idx = (y * frameCanvas.width + x) * 4;
-        const fade = Math.max(0, 1 - (x - rBoundary) / 12);
-        fData[idx + 3] = Math.round(fData[idx + 3] * fade);
-      }
-    }
-    fCtx.putImageData(fPixels, 0, 0);
-  }
 
   // 5. Composite onto output canvas
   const composite = document.createElement('canvas');
@@ -436,21 +431,32 @@ function compositeCustomFrame(
   ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(input, 0, 0);
 
-  ctx.save();
-  ctx.translate(anchorX, anchorY);
-  ctx.rotate(totalRotation);
-  ctx.scale(scale * yawWidthScale, scale);
-
-  // 6. Draw the authentic eyewear frame with subtle natural contact shadow
-  ctx.save();
-  ctx.shadowColor = 'rgba(15, 10, 22, 0.18)';
-  ctx.shadowBlur = Math.max(2, Math.min(6, (eyeSpan / scale) * 0.025));
-  ctx.shadowOffsetY = Math.max(1, Math.min(3, (eyeSpan / scale) * 0.012));
-  ctx.shadowOffsetX = 0;
-  ctx.drawImage(frameCanvas, -geom.bridge.x, -geom.opticalPupilY);
-  ctx.restore();
-
-  ctx.restore();
+  // Draw each side around its own eye-to-nose depth ratio. This keeps the
+  // near lens full size while naturally narrowing the far lens on turned faces.
+  const sourceCenterX = (geom.peakLeft.x + geom.peakRight.x) * 0.5;
+  const cosine = Math.cos(totalRotation), sine = Math.sin(totalRotation);
+  const drawHalf = (left: boolean, perspective: number) => {
+    ctx.save();
+    const xScale = scale * perspective;
+    const a = xScale * cosine, b = xScale * sine;
+    const c = -scale * sine, d = scale * cosine;
+    const e = anchorX - a * sourceCenterX - c * geom.opticalPupilY;
+    const f = anchorY - b * sourceCenterX - d * geom.opticalPupilY;
+    ctx.transform(a, b, c, d, e, f);
+    // Define the clip in frame-image coordinates after applying the same
+    // transform as the image. Clipping before transform used source pixel
+    // coordinates as portrait pixels and could clip both lenses off-face.
+    ctx.beginPath();
+    ctx.rect(left ? 0 : sourceCenterX, 0, left ? sourceCenterX : frameCanvas.width - sourceCenterX, frameCanvas.height);
+    ctx.clip();
+    ctx.shadowColor = 'rgba(15, 10, 22, 0.16)';
+    ctx.shadowBlur = Math.max(2, Math.min(6, (eyeSpan / scale) * 0.022));
+    ctx.shadowOffsetY = Math.max(1, Math.min(3, (eyeSpan / scale) * 0.01));
+    ctx.drawImage(frameCanvas, 0, 0);
+    ctx.restore();
+  };
+  drawHalf(true, leftPerspective);
+  drawHalf(false, rightPerspective);
   return composite;
 }
 
@@ -465,11 +471,11 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
   const [frameLink, setFrameLink] = useState('');
   const [customFrameUrl, setCustomFrameUrl] = useState<string | null>(null);
   const [customFrameAiReady, setCustomFrameAiReady] = useState(false);
-  const [customFrameNeedsAI, setCustomFrameNeedsAI] = useState(false);
   const [customFrameName, setCustomFrameName] = useState('');
   const [customFrameEnabled, setCustomFrameEnabled] = useState(false);
   const [frameBusy, setFrameBusy] = useState(false);
   const [frameAiBusy, setFrameAiBusy] = useState(false);
+  const [frameAiMessage, setFrameAiMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [variant, setVariant] = useState(0);
@@ -480,7 +486,7 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
   const [faceStatus, setFaceStatus] = useState<FaceVerificationStatus>('idle');
 
   // Precision fit adjustment controls
-  const [fitScale, setFitScale] = useState(1.0);
+  const [fitScale, setFitScale] = useState(1);
   const [fitOffsetY, setFitOffsetY] = useState(0);
   const [fitOffsetX, setFitOffsetX] = useState(0);
   const [fitRotate, setFitRotate] = useState(0);
@@ -528,7 +534,7 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
   };
 
   const resetLiveAdjustments = () => {
-    applyLiveAdjustment(1.0, 0, 0, 0);
+    applyLiveAdjustment(1, 0, 0, 0);
   };
 
   const request = useRef(0);
@@ -536,7 +542,6 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
   const urlRef = useRef<string | null>(null);
   const customFrameUrlRef = useRef<string | null>(null);
   const customFrameSourceUrlRef = useRef<string | null>(null);
-  const customFrameSourceNeedsAIRef = useRef(false);
   const frameRequest = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -563,23 +568,37 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
       const image = new Image(); image.src = sourceUrl; await image.decode();
       if (!image.naturalWidth || !image.naturalHeight) throw Error('That link did not return a readable sunglasses image.');
       if (!isCurrent()) return;
-      const prepared = prepareCustomFrame(image);
+      // Show the exact linked/uploaded source right away while AI preparation
+      // runs. The prepared asset is kept separately for the on-face output.
+      if (customFrameUrlRef.current && customFrameUrlRef.current !== customFrameSourceUrlRef.current) URL.revokeObjectURL(customFrameUrlRef.current);
+      if (customFrameSourceUrlRef.current) URL.revokeObjectURL(customFrameSourceUrlRef.current);
+      customFrameSourceUrlRef.current = sourceUrl;
+      customFrameUrlRef.current = sourceUrl;
+      setCustomFrameUrl(sourceUrl);
+      setCustomFrameAiReady(false);
+      setCustomFrameName('Original · ' + name);
+      setCustomFrameEnabled(true);
+      setResult(null); setFaceCropResult(null); setFaceCropOriginal(null); setError('');
+      setFrameAiBusy(true);
+      setFrameAiMessage('Preparing Hugging Face ZeroGPU…');
+      const prepared = await processCustomFrameWithHostedAI(image, message => {
+        if (isCurrent()) setFrameAiMessage(message);
+      });
       const preparedBlob = await new Promise<Blob>((resolve, reject) => prepared.toBlob(value => value ? resolve(value) : reject(Error('Could not prepare the sunglasses image.')), 'image/png'));
       if (!isCurrent()) return;
       const nextUrl = URL.createObjectURL(preparedBlob);
-      if (customFrameUrlRef.current) URL.revokeObjectURL(customFrameUrlRef.current);
-      if (customFrameSourceUrlRef.current && customFrameSourceUrlRef.current !== customFrameUrlRef.current) URL.revokeObjectURL(customFrameSourceUrlRef.current);
+      if (customFrameUrlRef.current && customFrameUrlRef.current !== customFrameSourceUrlRef.current) URL.revokeObjectURL(customFrameUrlRef.current);
       customFrameUrlRef.current = nextUrl;
-      customFrameSourceUrlRef.current = nextUrl;
-      const needsAngleCorrection = customFrameNeedsAngleCorrection(prepared);
-      customFrameSourceNeedsAIRef.current = needsAngleCorrection;
       setCustomFrameUrl(nextUrl);
-      setCustomFrameAiReady(false);
-      setCustomFrameNeedsAI(needsAngleCorrection);
-      setCustomFrameName(name);
+      setCustomFrameAiReady(true);
+      setCustomFrameName('Original · ' + name);
+      setFitScale(1); setFitOffsetX(0); setFitOffsetY(0); setFitRotate(0);
       setCustomFrameEnabled(true);
       setResult(null); setFaceCropResult(null); setFaceCropOriginal(null); setError('');
-    } finally { URL.revokeObjectURL(sourceUrl); }
+    } finally {
+      if (customFrameSourceUrlRef.current !== sourceUrl && customFrameUrlRef.current !== sourceUrl) URL.revokeObjectURL(sourceUrl);
+      if (isCurrent()) { setFrameAiBusy(false); setFrameAiMessage(''); }
+    }
   };
 
   const loadCustomFrameFile = async (file?: File) => {
@@ -629,11 +648,13 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
     const id = ++frameRequest.current;
     setFrameBusy(true); setFrameAiBusy(true); setError('');
     try {
-      const sourceImg = new Image();
-      sourceImg.src = sourceUrl;
-      await sourceImg.decode();
-      const baseCanvas = prepareCustomFrame(sourceImg);
-      const preparedCanvas = straightenCustomEyewear(baseCanvas);
+      const sourceImage = new Image();
+      sourceImage.src = sourceUrl;
+      await sourceImage.decode();
+      setFrameAiMessage('Preparing Hugging Face ZeroGPU…');
+      const preparedCanvas = await processCustomFrameWithHostedAI(sourceImage, message => {
+        if (id === frameRequest.current) setFrameAiMessage(message);
+      });
 
       if (id !== frameRequest.current) return null;
       const preparedBlob = await new Promise<Blob>((resolve, reject) =>
@@ -647,9 +668,7 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
       customFrameUrlRef.current = nextUrl;
       setCustomFrameUrl(nextUrl);
       setCustomFrameAiReady(true);
-      setCustomFrameNeedsAI(false);
-      setCustomFrameName(previous => previous.replace(/^AI front view · /, '').replace(/^Straightened · /, '').startsWith('Straightened')
-        ? previous : `Straightened · ${previous}`);
+      setCustomFrameName(previous => previous.startsWith('Original ·') ? previous : `Background removed · ${previous}`);
       setResult(null); setFaceCropResult(null); setFaceCropOriginal(null);
       return nextUrl;
     } catch (e) {
@@ -657,21 +676,8 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
       return null;
     } finally {
       if (id === frameRequest.current) setFrameBusy(false);
-      setFrameAiBusy(false);
+      if (id === frameRequest.current) { setFrameAiBusy(false); setFrameAiMessage(''); }
     }
-  };
-
-  const restoreCustomFrameSource = () => {
-    frameRequest.current++;
-    const sourceUrl = customFrameSourceUrlRef.current;
-    if (!sourceUrl) return;
-    if (customFrameUrlRef.current && customFrameUrlRef.current !== sourceUrl) URL.revokeObjectURL(customFrameUrlRef.current);
-    customFrameUrlRef.current = sourceUrl;
-    setCustomFrameUrl(sourceUrl);
-    setCustomFrameAiReady(false);
-    setCustomFrameNeedsAI(customFrameSourceNeedsAIRef.current);
-    setCustomFrameName(previous => previous.replace(/^AI front view · /, '').replace(/^AI front view of /, ''));
-    setResult(null); setFaceCropResult(null); setFaceCropOriginal(null); setError('');
   };
 
   const clearCustomFrame = () => {
@@ -681,8 +687,7 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
     customFrameUrlRef.current = null;
     customFrameSourceUrlRef.current = null;
     setCustomFrameUrl(null); setCustomFrameName(''); setCustomFrameEnabled(false);
-    setCustomFrameAiReady(false); setFrameAiBusy(false);
-    setCustomFrameNeedsAI(false); customFrameSourceNeedsAIRef.current = false;
+    setCustomFrameAiReady(false); setFrameAiBusy(false); setFrameAiMessage('');
     setFrameLink(''); setResult(null); setFaceCropResult(null); setFaceCropOriginal(null); setError('');
   };
 
@@ -809,13 +814,14 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
   };
 
   // Run 3D glasses fitting on the photo with Ultra-HD super-sampling and unified background rendering
-  const handleTryOn = async () => {
+  const handleTryOn = async (frameUrlOverride?: string, useDefaultFit = false) => {
     if (!photo) {
       fileInputRef.current?.click();
       return;
     }
 
-    if (customFrameEnabled && !customFrameUrl) {
+    const useCustomFrame = Boolean(frameUrlOverride) || customFrameEnabled;
+    if (useCustomFrame && !frameUrlOverride && !customFrameUrl) {
       setError('Upload a sunglasses image or add its image link first.');
       return;
     }
@@ -861,16 +867,14 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
       ctx.imageSmoothingQuality = 'high';
       ctx.drawImage(image, 0, 0, width, height);
 
-      if (customFrameEnabled) {
-        if (!customFrameUrl) throw Error('Upload a sunglasses image or add its image link first.');
-        // If an old mutated AI view was lingering in the browser session, restore the authentic source
-        if (customFrameSourceUrlRef.current && (customFrameUrl !== customFrameSourceUrlRef.current || customFrameName.startsWith('AI front view'))) {
-          setCustomFrameUrl(customFrameSourceUrlRef.current);
-          setCustomFrameAiReady(false);
-          setCustomFrameName(previous => previous.replace(/^AI front view · /, '').replace(/^AI front view of /, ''));
-        }
-        const fittedFrameUrl = customFrameSourceUrlRef.current || customFrameUrl;
-        if (!fittedFrameUrl || runId !== activeRun.current) return;
+      if (useCustomFrame) {
+        if (!frameUrlOverride && !customFrameUrl) throw Error('Upload a sunglasses image or add its image link first.');
+        // Fit the extracted, leveled asset shown in the preview.
+        const fittedFrameUrl = frameUrlOverride || (customFrameAiReady ? customFrameUrlRef.current : await normalizeCustomFrameWithAI());
+        // normalizeCustomFrameWithAI already records the provider's detailed
+        // error. Return through finally without replacing it with a generic one.
+        if (!fittedFrameUrl) return;
+        if (runId !== activeRun.current) return;
         const frameImage = new Image(); frameImage.src = fittedFrameUrl; await frameImage.decode();
         if (runId !== activeRun.current) return;
 
@@ -881,10 +885,10 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
         cachedDimsRef.current = { width, height };
 
         const composite = compositeCustomFrame(input, frameImage, points, width, height, {
-          scale: fitScale,
-          offsetY: fitOffsetY,
-          offsetX: fitOffsetX,
-          rotate: fitRotate,
+          scale: useDefaultFit ? 1 : fitScale,
+          offsetY: useDefaultFit ? 0 : fitOffsetY,
+          offsetX: useDefaultFit ? 0 : fitOffsetX,
+          rotate: useDefaultFit ? 0 : fitRotate,
         });
 
         const outputs = createPhotoCrops(composite, input, points, width, height);
@@ -1047,6 +1051,14 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
     }
   };
 
+  // Fit automatically whether the portrait or the processed sunglasses arrive
+  // first. The input card continues to show the untouched sunglasses source.
+  useEffect(() => {
+    if (photo && customFrameEnabled && customFrameAiReady && !result && !busy) {
+      void handleTryOn();
+    }
+  }, [photo, customFrameEnabled, customFrameAiReady]);
+
   return (
     <article className="photo-workspace">
       <button className="product-back" onClick={onBack}>
@@ -1110,10 +1122,18 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
                 </div>
               )}
 
-              <div className="photo-asset-preview">
+              <div className={`photo-asset-preview photo-face-preview ${photo ? 'has-photo !border-none' : ''} !h-72 !rounded-2xl relative overflow-hidden`}>
                 {photo ? (
                   <>
-                    <img src={photo} alt="Face photo for try-on" />
+                    {/* Ambient blurred background clone to eliminate black side bars */}
+                    <img
+                      src={photo}
+                      alt=""
+                      aria-hidden="true"
+                      className="absolute inset-0 w-full h-full object-cover blur-xl opacity-35 scale-110 pointer-events-none"
+                    />
+                    {/* Sharp portrait image on top */}
+                    <img src={photo} alt="Face photo for try-on" className="relative z-10 w-full h-full object-cover object-top rounded-2xl" />
 
                     {/* Floating face verification badge */}
                     {faceStatus === 'checking' && (
@@ -1163,7 +1183,7 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
                           <div className="flex-1">
                             <p className="text-[11px] font-bold text-red-100">Face not clear enough yet</p>
                             <p className="text-[10px] text-red-200/90 leading-tight mt-0.5">
-                              Full-body photos work when the face is bright and sharp. If it is tiny, blurry, or covered, try a closer crop or a higher-resolution original. Sunglasses images go in <strong>2. Eyewear frame</strong>.
+                              Use a clear front or three-quarter portrait with both eyes visible. Full-body photos work if the face is large and sharp; blurry or covered faces need a closer crop. Sunglasses images go in <strong>2. Eyewear frame</strong>.
                             </p>
                             <div className="flex gap-2 mt-2">
                               <button
@@ -1193,24 +1213,49 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
                   <>
                     {/* Tab 1: Upload File */}
                     {activeInputTab === 'upload' && (
-                      <label className="photo-placeholder cursor-pointer w-full h-full flex flex-col items-center justify-center gap-2 p-4 text-center">
-                        <ImagePlus size={34} className="text-[#a855f7] transition-transform group-hover:scale-110" />
-                        <strong className="text-white text-xs font-semibold">Upload face portrait</strong>
-                        <span className="text-[11px] text-[#b3a4c8] leading-tight">Click to browse or drag your photo here</span>
-                        <span className="text-[10px] text-[#8e7ea5]">Full-body photos work when the face is bright and sharp</span>
-                        <span className="text-[10px] text-[#8e7ea5]">JPG, PNG, WebP · up to 20 MB</span>
-                        <input
-                          ref={fileInputRef}
-                          aria-label="Upload face photo"
-                          type="file"
-                          accept="image/jpeg,image/png,image/webp"
-                          className="hidden"
-                          onChange={(e) => {
-                            upload(e.target.files?.[0]);
-                            e.target.value = '';
-                          }}
-                        />
-                      </label>
+                      <div className="w-full h-full flex flex-col justify-between p-2">
+                        <label className="photo-placeholder cursor-pointer w-full flex-1 flex flex-col items-center justify-center gap-1.5 p-3 text-center border-2 border-dashed border-purple-500/30 hover:border-purple-400/60 rounded-xl transition group">
+                          <ImagePlus size={32} className="text-[#a855f7] transition-transform group-hover:scale-110" />
+                          <strong className="text-white text-xs font-semibold">Upload face portrait</strong>
+                          <span className="text-[11px] text-[#b3a4c8] leading-tight">Click to browse or drag your photo here</span>
+                          <span className="text-[10px] text-[#8e7ea5]">Front or three-quarter view works best; keep both eyes visible</span>
+                          <span className="text-[10px] text-[#8e7ea5]">JPG, PNG, WebP · up to 20 MB</span>
+                          <input
+                            ref={fileInputRef}
+                            aria-label="Upload face photo"
+                            type="file"
+                            accept="image/jpeg,image/png,image/webp"
+                            className="hidden"
+                            onChange={(e) => {
+                              upload(e.target.files?.[0]);
+                              e.target.value = '';
+                            }}
+                          />
+                        </label>
+
+                        {/* Quick try with demo face row */}
+                        <div className="mt-2.5 pt-2 border-t border-white/10 flex items-center justify-between gap-2 px-1">
+                          <span className="text-[11px] text-[#b3a4c8] font-medium">Quick try with demo face:</span>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => loadDemoModel('/models_faces/female_oval.jpg', 'Female Portrait Model')}
+                              title="Female Face (Oval shape)"
+                              className="w-8 h-8 rounded-full border border-purple-400/50 hover:scale-110 transition overflow-hidden cursor-pointer shadow-sm hover:border-purple-400"
+                            >
+                              <img src="/models_faces/female_oval.jpg" alt="Female Model" className="w-full h-full object-cover" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => loadDemoModel('/models_faces/male_square.jpg', 'Male Portrait Model')}
+                              title="Male Face (Square shape)"
+                              className="w-8 h-8 rounded-full border border-purple-400/50 hover:scale-110 transition overflow-hidden cursor-pointer shadow-sm hover:border-purple-400"
+                            >
+                              <img src="/models_faces/male_square.jpg" alt="Male Model" className="w-full h-full object-cover" />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
                     )}
 
                     {/* Tab 2: Public URL */}
@@ -1311,7 +1356,7 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
                       Demo
                     </button>
                     <span className="text-white/20">·</span>
-                    <label className="photo-upload-action">
+                    <label className="photo-upload-action cursor-pointer">
                       <Upload size={13} />
                       <span>Replace</span>
                       <input
@@ -1326,19 +1371,40 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
                     </label>
                   </div>
                 ) : (
-                  <label className="photo-upload-action">
-                    <Upload size={14} />
-                    <span>Browse</span>
-                    <input
-                      aria-label="Upload face photo"
-                      type="file"
-                      accept="image/jpeg,image/png,image/webp"
-                      onChange={(e) => {
-                        upload(e.target.files?.[0]);
-                        e.target.value = '';
-                      }}
-                    />
-                  </label>
+                  <div className="flex items-center justify-between w-full">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] text-[#8e7ea5]">Demo faces:</span>
+                      <button
+                        type="button"
+                        onClick={() => loadDemoModel('/models_faces/female_oval.jpg', 'Female Portrait Model')}
+                        title="Female Face"
+                        className="w-7 h-7 rounded-full border border-purple-400/50 hover:scale-110 transition overflow-hidden cursor-pointer"
+                      >
+                        <img src="/models_faces/female_oval.jpg" alt="Female" className="w-full h-full object-cover" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => loadDemoModel('/models_faces/male_square.jpg', 'Male Portrait Model')}
+                        title="Male Face"
+                        className="w-7 h-7 rounded-full border border-purple-400/50 hover:scale-110 transition overflow-hidden cursor-pointer"
+                      >
+                        <img src="/models_faces/male_square.jpg" alt="Male" className="w-full h-full object-cover" />
+                      </button>
+                    </div>
+                    <label className="photo-upload-action cursor-pointer">
+                      <Upload size={14} />
+                      <span>Browse</span>
+                      <input
+                        aria-label="Upload face photo"
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp"
+                        onChange={(e) => {
+                          upload(e.target.files?.[0]);
+                          e.target.value = '';
+                        }}
+                      />
+                    </label>
+                  </div>
                 )}
               </footer>
             </section>
@@ -1347,7 +1413,7 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
             <section className="photo-asset-card">
               <header>
                 <h2>2. Eyewear frame</h2>
-                <span>{customFrameEnabled ? customFrameUrl ? customFrameAiReady ? 'LEVELED' : 'CUSTOM IMAGE' : 'ADD IMAGE' : '3D READY'}</span>
+                <span>{customFrameEnabled ? customFrameUrl ? customFrameAiReady ? 'SOURCE + FIT READY' : frameAiBusy ? 'PROCESSING' : 'SOURCE LOADED' : 'ADD IMAGE' : '3D READY'}</span>
               </header>
 
               <div className="photo-frame-source-tabs" role="tablist" aria-label="Eyewear source">
@@ -1359,34 +1425,72 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
                 </button>
               </div>
 
-              {customFrameEnabled ? <div className="photo-asset-preview photo-frame-preview custom-frame-preview">
-                {customFrameUrl ? <>
-                  <img src={customFrameUrl} alt={`Custom sunglasses preview: ${customFrameName}`} />
-                  <span className="photo-filename">{customFrameName}</span>
-                  <button type="button" className="photo-remove" aria-label="Remove custom sunglasses image" onClick={clearCustomFrame}><X size={16} /></button>
-                </> : <div className="custom-frame-empty"><Glasses size={34} /><strong>Add a sunglasses image</strong><span>Transparent PNG works best. Plain backgrounds are removed when possible.</span></div>}
-              </div> : <div className="photo-asset-preview photo-frame-preview">
-                <ProductThumbnail product={product} variantIndex={variant} />
-                <span className="photo-filename">{product.name}</span>
-              </div>}
+              {/* Clean Lightbox Showcase Container matching h-72 height */}
+              {customFrameEnabled ? (
+                <div className="relative overflow-hidden bg-white border border-gray-200/80 rounded-2xl w-full h-72 flex flex-col justify-between group shadow-sm">
+                  {customFrameUrl ? (
+                    <>
+                      <div className="flex-1 flex items-center justify-center p-6 overflow-hidden">
+                        <img
+                          src={customFrameSourceUrlRef.current || customFrameUrl}
+                          alt={`Original sunglasses source: ${customFrameName}`}
+                          className="max-h-44 max-w-full object-contain transition-transform duration-300 hover:scale-105"
+                        />
+                      </div>
+                      
+                      {/* Luxury e-commerce bottom title bar */}
+                      <div className="bg-gray-50/90 border-t border-gray-200 text-gray-900 px-4 py-2.5 flex items-center justify-between">
+                        <span className="text-xs font-bold text-gray-900 truncate max-w-[170px]">{customFrameName}</span>
+                        <button
+                          type="button"
+                          className="text-gray-500 hover:text-gray-900 p-0.5 rounded transition cursor-pointer"
+                          aria-label="Remove custom sunglasses image"
+                          onClick={clearCustomFrame}
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="flex-1 flex flex-col items-center justify-center gap-1.5 p-6 text-center text-gray-500">
+                      <Glasses size={34} className="text-purple-600/70 mb-1" />
+                      <strong className="text-xs font-bold text-gray-800">Add a sunglasses image</strong>
+                      <span className="text-[11px] text-gray-500 leading-tight">Transparent PNG works best. Plain backgrounds are removed when possible.</span>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="relative overflow-hidden bg-white border border-gray-200/80 rounded-2xl w-full h-72 flex flex-col justify-between group shadow-sm">
+                  <div className="flex-1 flex items-center justify-center p-6 overflow-hidden">
+                    <img
+                      src={product.thumbnailUrl || '/models/catalog-thumbnails/' + product.id + (variant ? '-v' + variant : '') + '.png'}
+                      alt={product.name}
+                      className="max-h-44 max-w-full object-contain transition-transform duration-300 hover:scale-105"
+                    />
+                  </div>
+                  
+                  {/* Luxury e-commerce bottom title bar */}
+                  <div className="bg-gray-50/90 border-t border-gray-200 text-gray-900 px-4 py-2.5 flex items-center justify-between">
+                    <span className="text-xs font-bold text-gray-900 truncate">{product.name}</span>
+                    <span className="text-[10px] font-mono font-semibold text-purple-700 bg-purple-100 px-2.5 py-0.5 rounded-full border border-purple-200">3D CAD</span>
+                  </div>
+                </div>
+              )}
 
               {customFrameEnabled && <div className="custom-frame-inputs">
                 <label className="custom-frame-upload">
-                  <Upload size={13} /> {frameBusy ? 'Loading image…' : 'Upload image'}
+                  <Upload size={13} /> {frameBusy ? frameAiBusy ? frameAiMessage || 'Hosted AI processing…' : 'Loading image…' : 'Upload image'}
                   <input type="file" accept="image/jpeg,image/png,image/webp" disabled={frameBusy} onChange={e => { loadCustomFrameFile(e.target.files?.[0]); e.target.value = ''; }} />
                 </label>
                 <form onSubmit={e => { e.preventDefault(); loadCustomFrameLink(); }}>
                   <input type="url" value={frameLink} onChange={e => setFrameLink(e.target.value)} placeholder="Paste sunglasses image URL" aria-label="Sunglasses image URL" required />
                   <button type="submit" disabled={frameBusy || !frameLink.trim()}><Globe size={12} /> Load link</button>
                 </form>
-                <button type="button" className="custom-frame-ai-button" onClick={() => customFrameAiReady ? restoreCustomFrameSource() : void normalizeCustomFrameWithAI()} disabled={frameBusy || busy || !customFrameUrl}>
-                  <Sparkles size={13} /> {frameBusy && frameAiBusy ? 'Leveling frame tilt…' : customFrameAiReady ? 'Restore original angle' : 'Auto-level frame tilt'}
-                </button>
-                <p>{customFrameAiReady ? 'Frame leveled horizontally. Click Fit to apply to eyes.' : 'The original frame shape is preserved and aligned directly to your eye pupils.'}</p>
+                <p>{customFrameAiReady ? 'Bria RMBG 2.0 removed the background and kept the sunglasses pixels. Only this frame image is sent for processing; your portrait stays on this device.' : 'Upload one clear pair. Bria RMBG 2.0 removes the background without redrawing the sunglasses.'}</p>
               </div>}
 
               <footer>
-                <span>{customFrameEnabled ? customFrameUrl ? customFrameAiReady ? 'Frame leveled · ready to fit' : 'Original frame shape · ready to fit' : 'Choose a file or image link' : 'Inspect the frame · select below'}</span>
+                <span>{customFrameEnabled ? customFrameUrl ? customFrameAiReady ? 'Original frame isolated · ready to fit' : 'Original image · ready to process' : 'Choose a file or image link' : 'Inspect the frame · select below'}</span>
                 <Glasses size={17} />
               </footer>
             </section>
@@ -1395,69 +1499,97 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
           {/* Settings card with Try On Action */}
           <section className="photo-settings-card">
             <h2>{customFrameEnabled ? 'Fit your custom sunglasses' : 'Make the look yours'}</h2>
-            <p>{customFrameEnabled ? 'The sunglasses shape is preserved and fitted across your eye pupils using anatomical face landmarks.' : 'Select your favorite 3D eyewear frame and finish, then click Try on to generate your photo.'}</p>
+            <p>{customFrameEnabled ? 'The frame is aligned to eye landmarks, with face roll and side angle accounted for.' : 'Select your favorite 3D eyewear frame and finish, then click Try on to generate your photo.'}</p>
 
-            {customFrameEnabled ? <div className="custom-frame-selection">
-              <div><span>ACTIVE IMAGE</span><strong>{customFrameUrl ? customFrameName : 'Waiting for sunglasses image'}</strong></div>
-              <button type="button" onClick={() => setCustomFrameEnabled(false)}>Use catalog frame</button>
-            </div> : <div className="photo-setting-fields">
-              <div>
-                <label htmlFor="photo-frame">FRAME</label>
-                <select
-                  id="photo-frame"
-                  value={product.id}
-                  onChange={(e) => {
-                    request.current++;
-                    const p = products.find((item) => item.id === e.target.value);
-                    if (p) {
-                      setVariant(0);
-                      onSelect(p);
-                      setResult(null); // Reset result so user clicks "Try on" to generate with new frame
-                      setFaceCropResult(null);
-                      setFaceCropOriginal(null);
-                    }
-                  }}
-                >
-                  {products.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-                </select>
+            {customFrameEnabled ? (
+              <div className="custom-frame-selection">
+                <div><span>ACTIVE IMAGE</span><strong>{customFrameUrl ? customFrameName : 'Waiting for sunglasses image'}</strong></div>
+                <button type="button" onClick={() => setCustomFrameEnabled(false)}>Use catalog frame</button>
               </div>
+            ) : (
+              /* Two-Column Grid: Left FRAME Dropdown, Right Circular FINISH Swatches matching h-[42px] */
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 items-end">
+                {/* Left Column: FRAME */}
+                <div className="flex flex-col">
+                  <div className="flex items-center justify-between mb-1.5 h-4">
+                    <label htmlFor="photo-frame" className="text-[10.5px] font-bold text-purple-300 tracking-wider uppercase">
+                      FRAME
+                    </label>
+                  </div>
+                  <select
+                    id="photo-frame"
+                    className="!m-0 bg-[#1a132b] border border-purple-500/30 rounded-xl text-white px-3.5 h-[42px] text-xs focus:outline-none focus:border-purple-400 w-full transition-colors cursor-pointer"
+                    value={product.id}
+                    onChange={(e) => {
+                      request.current++;
+                      const p = products.find((item) => item.id === e.target.value);
+                      if (p) {
+                        setVariant(0);
+                        onSelect(p);
+                        setResult(null);
+                        setFaceCropResult(null);
+                        setFaceCropOriginal(null);
+                      }
+                    }}
+                  >
+                    {products.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
 
-              <div>
-                <label htmlFor="photo-finish">FINISH</label>
-                <select
-                  id="photo-finish"
-                  value={variant}
-                  onChange={(e) => {
-                    request.current++;
-                    setVariant(Number(e.target.value));
-                    setResult(null); // Reset result so user clicks "Try on" to generate with new finish
-                    setFaceCropResult(null);
-                    setFaceCropOriginal(null);
-                  }}
-                >
-                  {product.variants.map((v, i) => (
-                    <option key={i} value={i}>
-                      {v.name}
-                    </option>
-                  ))}
-                </select>
+                {/* Right Column: FINISH (Circular color swatches matching h-[42px]) */}
+                <div className="flex flex-col">
+                  <div className="flex items-center justify-between mb-1.5 h-4">
+                    <label className="text-[10.5px] font-bold text-purple-300 tracking-wider uppercase">
+                      FINISH
+                    </label>
+                    <span className="text-[10px] text-purple-300 font-mono truncate max-w-[140px]">
+                      {product.variants[variant]?.name || 'Standard'}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2.5 px-3 h-[42px] bg-[#1a132b] border border-purple-500/30 rounded-xl w-full">
+                    {product.variants.map((v, i) => (
+                      <button
+                        key={i}
+                        type="button"
+                        title={v.name}
+                        onClick={() => {
+                          request.current++;
+                          setVariant(i);
+                          setResult(null);
+                          setFaceCropResult(null);
+                          setFaceCropOriginal(null);
+                        }}
+                        style={{
+                          background: v.lensHex
+                            ? `linear-gradient(135deg, ${v.frameHex} 40%, ${v.lensHex} 100%)`
+                            : v.frameHex || '#18181b',
+                        }}
+                        className={`w-6 h-6 rounded-full border border-white/20 transition-all cursor-pointer hover:scale-110 ${
+                          variant === i
+                            ? 'ring-2 ring-purple-400 ring-offset-2 ring-offset-[#0f0a19] scale-110 shadow-[0_0_10px_rgba(168,85,247,0.5)]'
+                            : 'opacity-70 hover:opacity-100'
+                        }`}
+                      />
+                    ))}
+                  </div>
+                </div>
               </div>
-            </div>}
+            )}
 
-            {/* Prominent Try On CTA Button */}
+            {/* Prominent Single Try On CTA Button with Clean Sparkles SVG (No extra emoji) */}
             <div className="my-4">
               <button
                 type="button"
-                className="photo-tryon-button flex items-center justify-center gap-2.5 w-full py-3.5 px-6 rounded-xl bg-gradient-to-r from-[#7c3aed] to-[#6d28d9] hover:from-[#8b5cf6] hover:to-[#7c3aed] text-white font-bold text-sm shadow-lg shadow-violet-500/35 transition-all cursor-pointer border border-white/20 disabled:opacity-50 disabled:cursor-not-allowed hover:scale-[1.01] active:scale-[0.99]"
-                onClick={handleTryOn}
+                className="w-full bg-gradient-to-r from-violet-600 via-purple-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 shadow-[0_0_25px_rgba(139,92,246,0.45)] hover:shadow-[0_0_35px_rgba(139,92,246,0.75)] transition-all font-semibold text-white rounded-xl py-3.5 flex items-center justify-center gap-2 text-sm cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed hover:scale-[1.01] active:scale-[0.99]"
+                onClick={() => void handleTryOn()}
                 disabled={busy || frameBusy || (customFrameEnabled && !customFrameUrl)}
               >
                 <Sparkles size={18} />
-                <span>{busy ? frameAiBusy ? 'AI correcting frame angle…' : 'Fitting frames on face…' : customFrameEnabled ? 'Fit custom image' : 'Try on'}</span>
+                <span>{busy ? 'Fitting frame to face…' : customFrameEnabled ? 'Fit custom image' : 'Try on'}</span>
               </button>
               {!photo && (
                 <p className="text-[11px] text-[#b3a4c8] text-center mt-2">
@@ -1466,16 +1598,8 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
               )}
             </div>
 
-            <div className="p-3 rounded-xl bg-violet-950/30 border border-violet-500/20 text-xs text-[#b3a4c8] flex items-center gap-2.5">
-              <Glasses size={18} className="text-violet-400 shrink-0" />
-                <span className="leading-snug">
-                  {customFrameEnabled ? 'Custom sunglasses are analyzed and fitted directly to your facial eye landmarks without altering the frame geometry.' : <>Frames are rendered from real 3D CAD models. Switch frames or finishes anytime and click <strong>Try on</strong>.</>}
-              </span>
-            </div>
-
             <p className="photo-privacy">
-              {customFrameEnabled ? <>Your portrait and sunglasses image stay 100% on your device. The eyewear is precisely composited over your eyes without changing your face.</> : <>Your portrait stays on your device. Frames are rendered over your original photo without changing your face, clothing or background.</>}
-
+              {customFrameEnabled ? <>Hugging Face ZeroGPU processes only the sunglasses image to remove its background. Your portrait stays in the browser and is not sent to the AI service; the original sunglasses pixels are preserved.</> : <>Your portrait stays on your device. Frames are rendered over your original photo without changing your face, clothing or background.</>}
             </p>
             {error && (
               <p className="photo-error" role="alert">
@@ -1487,33 +1611,51 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
 
         {/* Result Stage */}
         <section className="photo-result-card" aria-live="polite">
-          <div className={`photo-result-stage ${zoom > 1 ? 'photo-result-zoomed' : ''}`}>
+          <div className={`photo-result-stage ${zoom > 1 ? 'photo-result-zoomed' : ''} bg-[linear-gradient(to_right,#ffffff06_1px,transparent_1px),linear-gradient(to_bottom,#ffffff06_1px,transparent_1px)] bg-[size:24px_24px]`}>
             <div className="photo-zoom-content" style={{ width: `${zoom * 100}%`, height: `${zoom * 100}%`, position: 'relative' }}>
-              <div className="photo-result-labels">
-                <span>ORIGINAL {viewMode === 'face' && faceCropOriginal ? '(FACE)' : ''}</span>
-                <span>{result ? (viewMode === 'face' && faceCropResult ? 'FACE TRY-ON PREVIEW' : 'VIRTUAL TRY-ON PREVIEW') : 'PREVIEW'}</span>
+              
+              {/* Sleek Centered Glass Pill Toggle at top-4 */}
+              <div className="absolute top-4 inset-x-0 z-30 flex justify-center pointer-events-none">
+                <div className="pointer-events-auto flex items-center gap-1 bg-black/60 backdrop-blur-md border border-white/15 rounded-full p-1 shadow-xl">
+                  <span className="px-3.5 py-1 rounded-full text-[10px] font-mono font-bold uppercase tracking-wider text-slate-300">
+                    ORIGINAL {viewMode === 'face' && faceCropOriginal ? '(FACE)' : ''}
+                  </span>
+                  <div className="w-[1px] h-3.5 bg-white/20" />
+                  <span className="px-3.5 py-1 rounded-full text-[10px] font-mono font-bold uppercase tracking-wider bg-purple-600/40 text-purple-200 border border-purple-400/40 shadow-sm">
+                    {result ? (viewMode === 'face' && faceCropResult ? 'FACE TRY-ON' : 'PREVIEW') : 'PREVIEW'}
+                  </span>
+                </div>
               </div>
 
               {photo ? (
                 <>
+                  {/* Ambient blurred backdrop clone to eliminate harsh black side bars */}
                   <img
-                    className="photo-result-image"
+                    src={photo}
+                    alt=""
+                    aria-hidden="true"
+                    className="absolute inset-0 w-full h-full object-cover blur-2xl opacity-30 scale-110 pointer-events-none"
+                  />
+
+                  {/* Main sharp portrait image on top */}
+                  <img
+                    className="photo-result-image relative z-10 h-full w-full object-contain"
                     src={(viewMode === 'face' && faceCropResult ? faceCropResult : result) || photo}
                     alt={result ? `${product.name} fitted on your face` : 'Photo preview'}
                   />
                   {result && (
                     <>
                       <img
-                        className="photo-result-original"
+                        className="photo-result-original relative z-10"
                         src={(viewMode === 'face' && faceCropOriginal ? faceCropOriginal : photo)!}
                         alt="Original for comparison"
                         style={{ clipPath: `inset(0 ${100 - split}% 0 0)` }}
                       />
-                      <div className="photo-split-line" style={{ left: `${split}%` }}>
+                      <div className="photo-split-line z-20" style={{ left: `${split}%` }}>
                         <span>↔</span>
                       </div>
                       <input
-                        className="photo-split-control"
+                        className="photo-split-control z-20"
                         type="range"
                         min="0"
                         max="100"
@@ -1523,13 +1665,16 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
                       />
                     </>
                   )}
-
                 </>
               ) : (
-                <div className="photo-result-empty">
-                  <Glasses size={40} />
-                  <h2>Your next look starts here</h2>
-                  <p>Upload a face photo and click <strong>Try on</strong> to see your fitted result.</p>
+                <div className="photo-result-empty flex flex-col items-center justify-center p-6 text-center">
+                  <div className="w-14 h-14 rounded-2xl bg-purple-500/10 border border-purple-500/20 text-purple-400 flex items-center justify-center mx-auto mb-3 shadow-[0_0_20px_rgba(168,85,247,0.15)]">
+                    <Glasses size={28} />
+                  </div>
+                  <h2 className="text-base font-bold text-white mb-1">Your next look starts here</h2>
+                  <p className="text-xs text-purple-200/70 max-w-xs leading-relaxed">
+                    Upload a face photo and click <strong>Try on</strong> to see your fitted result.
+                  </p>
                 </div>
               )}
             </div>
@@ -1541,19 +1686,6 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
               </div>
             )}
           </div>
-
-                  {photo && !result && !busy && (
-                    <div className="photo-preview-action">
-                      <button
-                        onClick={handleTryOn}
-                        disabled={frameBusy || (customFrameEnabled && !customFrameUrl)}
-                        className="flex items-center gap-2 px-6 py-3 rounded-xl bg-gradient-to-r from-[#7c3aed] to-[#6d28d9] hover:from-[#8b5cf6] hover:to-[#7c3aed] text-white font-bold text-sm shadow-xl shadow-violet-500/40 border border-white/20 transition-all cursor-pointer hover:scale-105 active:scale-95"
-                      >
-                        <Sparkles size={16} />
-                        <span>{customFrameEnabled ? 'Fit custom image' : 'Try on'}</span>
-                      </button>
-                    </div>
-                  )}
 
           {result && customFrameEnabled && (
             <div className="w-full p-3 rounded-xl bg-[#171026]/95 border border-violet-500/30 backdrop-blur-md shadow-xl my-2">

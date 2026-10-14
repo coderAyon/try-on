@@ -1,57 +1,7 @@
 import { Router } from 'express';
+import { Client, handle_file } from '@gradio/client';
 import sharp from 'sharp';
 const router = Router();
-
-async function runCloudflareImageEdit(image: string, prompt: string) {
-  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
-  const token = process.env.CLOUDFLARE_API_TOKEN;
-  if (!accountId || !token) throw Error('Cloudflare Workers AI needs CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN in the server .env.');
-  const match = /^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/=]+)$/.exec(image);
-  if (!match) throw Error('Cloudflare image editing accepts PNG, JPG or WebP input.');
-  const [, format, encoded] = match;
-  // FLUX.2 Klein accepts reference images below 512x512. Downscale locally to
-  // keep uploads within the model limit while preserving the original aspect ratio.
-  const input = await sharp(Buffer.from(encoded, 'base64'), { limitInputPixels: 40_000_000 })
-    .rotate()
-    .resize({ width: 511, height: 511, fit: 'inside', withoutEnlargement: true })
-    .png()
-    .toBuffer({ resolveWithObject: true });
-  const outputScale = Math.max(1, 256 / Math.min(input.info.width, input.info.height));
-  const outputWidth = Math.round(input.info.width * outputScale);
-  const outputHeight = Math.round(input.info.height * outputScale);
-  const form = new FormData();
-  form.append('prompt', prompt);
-  form.append('guidance', '3.5');
-  form.append('width', String(outputWidth));
-  form.append('height', String(outputHeight));
-  form.append('input_image_0', new Blob([input.data], { type: 'image/png' }), 'portrait.png');
-  const model = process.env.CLOUDFLARE_IMG2IMG_MODEL || '@cf/black-forest-labs/flux-2-klein-4b';
-  const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/ai/run/${model}`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}` },
-    body: form,
-    signal: AbortSignal.timeout(170000),
-  });
-  if (!response.ok) throw Error('Cloudflare Workers AI could not prepare the image. Check the token, Account ID, model access and daily quota.');
-  const contentType = response.headers.get('content-type') || '';
-  if (contentType.startsWith('image/')) {
-    const output = Buffer.from(await response.arrayBuffer());
-    if (output.length) return `data:${contentType.split(';')[0]};base64,${output.toString('base64')}`;
-  }
-  const payload = await response.json().catch(() => ({})) as { success?: boolean; errors?: { message?: string }[]; result?: { image?: string | number[] } };
-  if (payload.success === false) throw Error(payload.errors?.[0]?.message || 'Cloudflare Workers AI rejected this image.');
-  const generated = payload.result?.image;
-  if (typeof generated === 'string' && generated.startsWith('data:image/')) return generated;
-  const generatedBytes = typeof generated === 'string'
-    ? Buffer.from(generated, 'base64')
-    : Array.isArray(generated) ? Buffer.from(generated) : null;
-  if (generatedBytes?.length) {
-    const metadata = await sharp(generatedBytes).metadata();
-    const mime = metadata.format === 'jpeg' ? 'image/jpeg' : `image/${metadata.format || 'png'}`;
-    return `data:${mime};base64,${generatedBytes.toString('base64')}`;
-  }
-  throw Error('Cloudflare Workers AI returned no edited image.');
-}
 
 router.post('/prepare-portrait', (_req, res) => {
   res.status(410).json({ error: 'Portrait generation is disabled. Photo try-on preserves the original image and overlays eyewear locally.' });
@@ -125,6 +75,61 @@ export async function processAndStraightenFrame(inputBuffer: Buffer): Promise<Bu
     .toBuffer();
 }
 
+const BRIA_SPACE = 'briaai/BRIA-RMBG-2.0';
+const BRIA_SPACE_ORIGIN = 'https://briaai-bria-rmbg-2-0.hf.space';
+
+function getSpaceOutputUrl(file: unknown, root: string): string {
+  const value = typeof file === 'string'
+    ? file
+    : file && typeof file === 'object'
+      ? ((file as { url?: unknown }).url || (file as { path?: unknown }).path)
+      : null;
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error('Bria ZeroGPU returned no transparent image file.');
+  }
+
+  const url = /^https?:\/\//i.test(value)
+    ? new URL(value)
+    : value.startsWith('/gradio_api/file=') || value.startsWith('/file=')
+      ? new URL(value, root)
+      : new URL(`/gradio_api/file=${value}`, root);
+  if (url.protocol !== 'https:' || url.hostname !== new URL(BRIA_SPACE_ORIGIN).hostname) {
+    throw new Error('Bria ZeroGPU returned an unexpected file URL.');
+  }
+  return url.toString();
+}
+
+async function removeFrameBackgroundWithZeroGpu(inputBuffer: Buffer, token?: string): Promise<Buffer> {
+  // Normalize EXIF orientation and cap the remote payload while keeping all
+  // RGB pixels from the user's source image. The model supplies only alpha.
+  const normalized = await sharp(inputBuffer)
+    .rotate()
+    .resize({ width: 1800, height: 1800, fit: 'inside', withoutEnlargement: true })
+    .png()
+    .toBuffer();
+  const client = await Client.connect(BRIA_SPACE, token ? { token } : undefined);
+  try {
+    // The public Bria Space exposes its RMBG 2.0 cutout endpoint through Gradio.
+    // Its transparent PNG preserves the source eyewear pixels; only its alpha
+    // mask is inferred. This uses ZeroGPU's free daily quota, not paid providers.
+    const result = await client.predict('/image', [handle_file(normalized)]);
+    const resultFile = Array.isArray(result.data) ? result.data[1] : undefined;
+    const outputUrl = getSpaceOutputUrl(resultFile, client.config?.root || BRIA_SPACE_ORIGIN);
+    const response = await fetch(outputUrl, {
+      signal: AbortSignal.timeout(60_000),
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    });
+    if (!response.ok) throw new Error(`Could not download the Bria ZeroGPU cutout (HTTP ${response.status}).`);
+    const output = Buffer.from(await response.arrayBuffer());
+    if (!output.length || output.length > 30 * 1024 * 1024) {
+      throw new Error('Bria ZeroGPU returned an empty or oversized cutout.');
+    }
+    return await sharp(output).png().toBuffer();
+  } finally {
+    client.close();
+  }
+}
+
 router.post('/normalize-frame', async (req, res) => {
   const image = req.body?.image;
   const match = typeof image === 'string'
@@ -142,11 +147,35 @@ router.post('/normalize-frame', async (req, res) => {
   }
 
   try {
+    if (req.body?.useAI) {
+      const token = process.env.HF_SPACE_TOKEN?.trim() || process.env.HF_TOKEN?.trim();
+      const processed = await removeFrameBackgroundWithZeroGpu(bytes, token);
+      res.json({ image: `data:image/png;base64,${processed.toString('base64')}`, model: 'briaai/BRIA-RMBG-2.0', provider: 'Hugging Face ZeroGPU · Bria' });
+      return;
+    }
     // 1. Process and straighten via local computer vision engine
     const processed = await processAndStraightenFrame(bytes);
     const resultBase64 = `data:image/png;base64,${processed.toString('base64')}`;
     res.json({ image: resultBase64 });
   } catch (err: any) {
+    if (req.body?.useAI) {
+      const status = Number(err?.httpResponse?.status ?? err?.status ?? 0);
+      const message = String(err?.message || '');
+      if (status === 401 || status === 403 || /invalid.*token|unauthorized|authentication/i.test(message)) {
+        res.status(502).json({ error: 'Hugging Face Space authentication failed. Use a valid token with read access to public Spaces, or clear HF_SPACE_TOKEN to try the shared anonymous quota.' });
+        return;
+      }
+      if (status === 429 || /quota|zero.?gpu|capacity|too many requests/i.test(message)) {
+        res.status(429).json({ error: 'Hugging Face ZeroGPU is busy or its free quota is used up. Wait and retry later; signed-in free accounts receive up to 5 GPU minutes per day.' });
+        return;
+      }
+      if (/sleeping|starting|building|loading/i.test(message)) {
+        res.status(503).json({ error: 'Bria ZeroGPU is starting up. Wait a minute, then try again.' });
+        return;
+      }
+      res.status(502).json({ error: message || 'Bria ZeroGPU could not isolate the sunglasses. Retry with a clear product photo.' });
+      return;
+    }
     // Fallback: return trimmed original PNG
     try {
       const fallback = await sharp(bytes).png().toBuffer();

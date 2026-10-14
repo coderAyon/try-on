@@ -26,11 +26,20 @@
               _mod = val;
             }
           });
+        try {
+          var theme = localStorage.getItem('lumen_theme');
+          if (theme === 'light') {
+            document.documentElement.classList.remove('dark');
+          } else if (theme === 'dark') {
+            document.documentElement.classList.add('dark');
+          } else if (window.matchMedia && !window.matchMedia('(prefers-color-scheme: dark)').matches) {
+            document.documentElement.classList.remove('dark');
+          }
         } catch(e) {}
       })();
     </script>
   </head>
-  <body class="bg-luxury-950 text-slate-100 antialiased selection:bg-luxury-gold selection:text-luxury-950 overflow-x-hidden min-h-screen">
+  <body class="antialiased overflow-x-hidden min-h-screen">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

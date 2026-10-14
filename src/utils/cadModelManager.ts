@@ -3,6 +3,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { SunglassesProduct, ColorVariant } from '../types';
 import { createSunglasses3D } from './glasses3d';
 import { loadImportedEyewear } from './importedEyewear';
+import { createCustomCutoutEyewear3D } from './customFrameProcessor';
 
 interface CachedModel {
   originalScene: THREE.Group;
@@ -56,6 +57,9 @@ export async function loadEyewearCADModel(
   variant: ColorVariant,
   clippingPlanes?: THREE.Plane[]
 ): Promise<THREE.Group> {
+  if (product.isExternal || product.customFrameUrl || product.customFrameCutoutUrl) {
+    return createCustomCutoutEyewear3D(product);
+  }
   if (product.model) return loadImportedEyewear(product.model);
   const modelPath = getModelPath(product);
   if (['Round', 'Sport', 'Cat-Eye'].includes(product.category)) {

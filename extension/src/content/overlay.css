@@ -1,0 +1,75 @@
+/* Lumen Anywhere Try-On Floating Badge & Overlay Styles */
+
+.lumen-tryon-badge {
+  position: absolute;
+  z-index: 999999;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: 9999px;
+  background: rgba(18, 14, 34, 0.88);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(168, 85, 247, 0.45);
+  box-shadow: 0 6px 24px rgba(109, 40, 217, 0.35), 0 2px 8px rgba(0, 0, 0, 0.4);
+  color: #ffffff;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  opacity: 0;
+  transform: translateY(6px) scale(0.96);
+  pointer-events: none;
+  transition: opacity 0.22s cubic-bezier(0.16, 1, 0.3, 1), transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s ease;
+  user-select: none;
+}
+
+.lumen-tryon-badge.lumen-visible {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  pointer-events: auto;
+}
+
+.lumen-tryon-badge:hover {
+  background: rgba(28, 20, 54, 0.95);
+  border-color: rgba(192, 132, 252, 0.8);
+  box-shadow: 0 8px 30px rgba(139, 92, 246, 0.55), 0 0 12px rgba(168, 85, 247, 0.4);
+  transform: translateY(-2px) scale(1.03);
+}
+
+.lumen-tryon-badge:active {
+  transform: translateY(0) scale(0.97);
+}
+
+.lumen-tryon-badge .lumen-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  color: #c084fc;
+  animation: lumen-glow 2.5s infinite ease-in-out;
+}
+
+.lumen-tryon-badge .lumen-text {
+  color: #f3e8ff;
+  white-space: nowrap;
+}
+
+.lumen-tryon-badge .lumen-sparkle {
+  color: #34d399;
+  font-size: 11px;
+}
+
+@keyframes lumen-glow {
+  0%, 100% {
+    transform: scale(1);
+    filter: drop-shadow(0 0 2px rgba(192, 132, 252, 0.4));
+  }
+  50% {
+    transform: scale(1.12);
+    filter: drop-shadow(0 0 6px rgba(192, 132, 252, 0.8));
+  }
+}

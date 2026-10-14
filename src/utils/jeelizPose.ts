@@ -27,8 +27,12 @@ export class JeelizPoseTracker {
       const delta = angular
         ? Math.atan2(Math.sin(input[key] - this.previous[key]), Math.cos(input[key] - this.previous[key]))
         : input[key] - this.previous[key];
-      this.velocity[key] += alpha(1.5) * (delta / dt - this.velocity[key]);
-      const cutoff = (key === 's' ? 1.8 : 3) + (angular ? 5 : 24) * Math.abs(this.velocity[key]);
+      // Distance changes need a faster attack than quiet pose noise. Using the
+      // same slow velocity estimator for scale made rapid approach/retreat feel
+      // one or two frames behind the face.
+      const velocityCutoff = key === 's' ? 6 : 1.5;
+      this.velocity[key] += alpha(velocityCutoff) * (delta / dt - this.velocity[key]);
+      const cutoff = (key === 's' ? 2.4 : 3) + (angular ? 5 : key === 's' ? 14 : 24) * Math.abs(this.velocity[key]);
       const error = angular
         ? Math.atan2(Math.sin(input[key] - this.pose[key]), Math.cos(input[key] - this.pose[key]))
         : input[key] - this.pose[key];
@@ -45,7 +49,12 @@ export function projectJeelizPose(
   position: THREE.Vector3, quaternion: THREE.Quaternion,
 ): number {
   const tanX = camera.aspect * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
-  const depth = 1 / (2 * Math.max(0.015, pose.s) * tanX) + 0.5;
+  // FaceFilter's apparent face size varies as the head turns. Without a
+  // small yaw correction that variation makes the glasses swell in profile.
+  // Frontal sizing remains unchanged.
+  const yaw = THREE.MathUtils.clamp(Math.abs(pose.ry), 0, Math.PI / 2);
+  const yawDepthCompensation = 1 + 0.28 * Math.sin(yaw) ** 2;
+  const depth = (1 / (2 * Math.max(0.015, pose.s) * tanX) + 0.5) * yawDepthCompensation;
   quaternion.setFromEuler(new THREE.Euler(pose.rx, pose.ry, pose.rz, 'ZYX'));
   // Official Jeeliz unit-cube pivot: rotate about the skull, not the front lenses.
   const sinZ = Math.sin(pose.rz), cosZ = Math.cos(pose.rz);

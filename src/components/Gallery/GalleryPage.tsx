@@ -96,7 +96,7 @@ export const GalleryPage: React.FC<GalleryPageProps> = ({
   return (
     <div className="w-full max-w-[1440px] mx-auto flex flex-col gap-6 select-none animate-in fade-in duration-200">
       {/* 1. Header & Navigation Controls */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white/95 backdrop-blur-md rounded-[24px] border border-[#eceaf5] p-5 sm:p-7 shadow-[0_2px_16px_rgba(109,40,217,0.04)]">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white/95 dark:bg-[#0c1322]/95 backdrop-blur-md rounded-[24px] border border-[#eceaf5] dark:border-blue-900/40 p-5 sm:p-7 shadow-[0_2px_16px_rgba(109,40,217,0.04)] dark:shadow-[0_4px_24px_rgba(3,7,18,0.7)]">
         <div className="flex flex-col gap-1.5">
           <div className="flex items-center gap-2">
             <button
@@ -104,21 +104,21 @@ export const GalleryPage: React.FC<GalleryPageProps> = ({
                 soundEffects.playClick();
                 onBackToFittingRoom();
               }}
-              className="flex items-center gap-2 text-[12.5px] font-bold text-[#6355f6] hover:text-[#4f3ff2] transition-colors cursor-pointer group"
+              className="flex items-center gap-2 text-[12.5px] font-bold text-[#6355f6] dark:text-cyan-400 hover:text-[#4f3ff2] dark:hover:text-cyan-300 transition-colors cursor-pointer group"
             >
               <ArrowLeft size={16} className="group-hover:-translate-x-0.5 transition-transform" />
               <span>Back to Fitting Room</span>
             </button>
-            <span className="text-[#dcd7f2]">/</span>
-            <span className="text-[10px] font-bold uppercase tracking-widest text-[#7c749c] bg-[#f4f2fc] px-2.5 py-0.5 rounded-full border border-[#e5e1f7]">
+            <span className="text-[#dcd7f2] dark:text-blue-900/60">/</span>
+            <span className="text-[10px] font-bold uppercase tracking-widest text-[#7c749c] dark:text-cyan-300 bg-[#f4f2fc] dark:bg-cyan-500/10 px-2.5 py-0.5 rounded-full border border-[#e5e1f7] dark:border-cyan-500/20">
               Lookbook Gallery
             </span>
           </div>
 
-          <h1 className="text-[22px] sm:text-[26px] font-bold text-[#181236] tracking-tight">
+          <h1 className="text-[22px] sm:text-[26px] font-bold text-[#181236] dark:text-white tracking-tight">
             Saved Try-On Snapshots
           </h1>
-          <p className="text-[12.5px] text-[#696187] max-w-xl">
+          <p className="text-[12.5px] text-[#696187] dark:text-slate-400 max-w-xl">
             Every photo snapped during your live camera fitting room session is safely preserved here. Compare your looks, download in ultra high-resolution, or try on again.
           </p>
         </div>
@@ -166,12 +166,12 @@ export const GalleryPage: React.FC<GalleryPageProps> = ({
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search by frame name..."
-              className="w-full pl-9 pr-3.5 py-2 rounded-xl bg-white border border-[#e4e1f2] text-[12.5px] text-[#1b153b] placeholder-[#a69fc0] focus:outline-none focus:border-[#6355f6] transition-all"
+              className="w-full pl-9 pr-3.5 py-2 rounded-xl bg-white dark:bg-[#0e1628] border border-[#e4e1f2] dark:border-blue-900/40 text-[12.5px] text-[#1b153b] dark:text-slate-100 placeholder-[#a69fc0] dark:placeholder-slate-500 focus:outline-none focus:border-[#6355f6] dark:focus:border-cyan-400 transition-all"
             />
           </div>
 
-          <div className="text-[12.5px] font-semibold text-[#574f76]">
-            Showing <span className="text-[#6355f6] font-bold">{filteredLooks.length}</span> of {savedLooks.length} {savedLooks.length === 1 ? 'look' : 'looks'}
+          <div className="text-[12.5px] font-semibold text-[#574f76] dark:text-slate-400">
+            Showing <span className="text-[#6355f6] dark:text-cyan-400 font-bold">{filteredLooks.length}</span> of {savedLooks.length} {savedLooks.length === 1 ? 'look' : 'looks'}
           </div>
         </div>
       )}
@@ -228,7 +228,7 @@ export const GalleryPage: React.FC<GalleryPageProps> = ({
               <div
                 key={look.id}
                 onClick={() => setSelectedLook(look)}
-                className="bg-white rounded-[22px] border border-[#eceaf5] overflow-hidden shadow-[0_2px_14px_rgba(109,40,217,0.05)] hover:shadow-[0_8px_28px_rgba(99,85,246,0.14)] hover:border-[#cfc9fc] transition-all duration-200 cursor-pointer flex flex-col group"
+                className="bg-white dark:bg-[#0c1322] rounded-[22px] border border-[#eceaf5] dark:border-blue-900/40 overflow-hidden shadow-[0_2px_14px_rgba(109,40,217,0.05)] dark:shadow-[0_4px_20px_rgba(3,7,18,0.7)] hover:shadow-[0_8px_28px_rgba(99,85,246,0.14)] dark:hover:shadow-[0_8px_28px_rgba(6,182,212,0.18)] hover:border-[#cfc9fc] dark:hover:border-cyan-500/40 transition-all duration-200 cursor-pointer flex flex-col group"
               >
                 {/* Snapshot Image Container */}
                 <div className="relative aspect-[4/3] bg-[#161228] overflow-hidden">
@@ -261,7 +261,7 @@ export const GalleryPage: React.FC<GalleryPageProps> = ({
 
                   {/* Bottom Image Info */}
                   <div className="absolute bottom-3 inset-x-3 text-white">
-                    <p className="text-[10px] font-mono uppercase tracking-wider text-[#d0c9ff] flex items-center gap-1">
+                    <p className="text-[10px] font-mono uppercase tracking-wider text-[#d0c9ff] dark:text-cyan-300 flex items-center gap-1">
                       <Calendar size={11} /> {formatDate(look.capturedAt)}
                     </p>
                     <h3 className="text-[14px] font-bold truncate leading-snug drop-shadow-sm">
@@ -271,11 +271,11 @@ export const GalleryPage: React.FC<GalleryPageProps> = ({
                 </div>
 
                 {/* Card Controls & Action Buttons */}
-                <div className="p-3.5 bg-white flex items-center justify-between gap-2 border-t border-[#f2eff8]">
+                <div className="p-3.5 bg-white dark:bg-[#0c1322] flex items-center justify-between gap-2 border-t border-[#f2eff8] dark:border-blue-900/30">
                   {/* Try On Button */}
                   <button
                     onClick={(e) => handleTryOnFrame(look.productId, e)}
-                    className="flex-1 py-2 px-3 rounded-xl bg-[#f2efff] hover:bg-[#6355f6] text-[#6355f6] hover:text-white text-[12px] font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
+                    className="flex-1 py-2 px-3 rounded-xl bg-[#f2efff] dark:bg-[#131d35] hover:bg-[#6355f6] dark:hover:bg-cyan-500 text-[#6355f6] dark:text-cyan-300 hover:text-white dark:hover:text-slate-950 text-[12px] font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
                   >
                     <Glasses size={14} />
                     <span>Try On Again</span>
@@ -285,7 +285,7 @@ export const GalleryPage: React.FC<GalleryPageProps> = ({
                   <button
                     onClick={(e) => handleDownload(look, e)}
                     title="Download High-Res Snapshot"
-                    className="w-8 h-8 rounded-xl bg-[#f5f3fb] hover:bg-[#eae6f8] text-[#4d456d] hover:text-[#191338] flex items-center justify-center transition-all cursor-pointer"
+                    className="w-8 h-8 rounded-xl bg-[#f5f3fb] dark:bg-[#131d33] hover:bg-[#eae6f8] dark:hover:bg-[#1b2847] text-[#4d456d] dark:text-slate-300 hover:text-[#191338] dark:hover:text-white flex items-center justify-center transition-all cursor-pointer"
                   >
                     <Download size={15} />
                   </button>
@@ -294,9 +294,9 @@ export const GalleryPage: React.FC<GalleryPageProps> = ({
                   <button
                     onClick={(e) => handleCopyShare(look, e)}
                     title="Copy Frame Link"
-                    className="w-8 h-8 rounded-xl bg-[#f5f3fb] hover:bg-[#eae6f8] text-[#4d456d] hover:text-[#191338] flex items-center justify-center transition-all cursor-pointer"
+                    className="w-8 h-8 rounded-xl bg-[#f5f3fb] dark:bg-[#131d33] hover:bg-[#eae6f8] dark:hover:bg-[#1b2847] text-[#4d456d] dark:text-slate-300 hover:text-[#191338] dark:hover:text-white flex items-center justify-center transition-all cursor-pointer"
                   >
-                    {copiedId === look.id ? <Check size={14} className="text-emerald-600" /> : <Share2 size={14} />}
+                    {copiedId === look.id ? <Check size={14} className="text-emerald-500" /> : <Share2 size={14} />}
                   </button>
 
                   {/* Delete Button */}
@@ -309,7 +309,7 @@ export const GalleryPage: React.FC<GalleryPageProps> = ({
                       }
                     }}
                     title="Delete Snapshot"
-                    className="w-8 h-8 rounded-xl bg-[#fef2f2] hover:bg-rose-100 text-rose-500 hover:text-rose-700 flex items-center justify-center transition-all cursor-pointer"
+                    className="w-8 h-8 rounded-xl bg-[#fef2f2] dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/60 text-rose-500 hover:text-rose-700 flex items-center justify-center transition-all cursor-pointer"
                   >
                     <Trash2 size={14} />
                   </button>

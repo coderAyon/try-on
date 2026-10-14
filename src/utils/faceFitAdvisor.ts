@@ -32,7 +32,16 @@ export class FaceMeasurementSampler {
 
     if (Object.values(raw).some(v => !Number.isFinite(v) || v < 0.25 || v > 2.5)) return undefined;
 
-    const old = this.value;
+    const previous = this.value;
+    // A person can step into the camera without a detector dropout. If the
+    // anatomical ratios jump together, discard the previous person's running
+    // average instead of blending two faces into the same recommendation.
+    const personChanged = previous && (
+      Math.abs(raw.heightToWidth - previous.heightToWidth) > .14 ||
+      Math.abs(raw.jawToCheek - previous.jawToCheek) > .12 ||
+      Math.abs(raw.foreheadToCheek - previous.foreheadToCheek) > .12
+    );
+    const old = personChanged ? undefined : previous;
     const smooth = (prev: number | undefined, curr: number) => (prev ? prev * 0.75 + curr * 0.25 : curr);
 
     const updatedHeightToWidth = smooth(old?.heightToWidth, raw.heightToWidth);

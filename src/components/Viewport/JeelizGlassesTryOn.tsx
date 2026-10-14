@@ -42,6 +42,7 @@ export interface JeelizGlassesTryOnProps {
   snapshotTrigger?: number;
   onLoadingChange?: (loading: boolean) => void;
   onSwitchMode?: (mode: TryOnMode) => void;
+  splitPosition?: number;
 }
 
 /**
@@ -80,6 +81,7 @@ export const JeelizGlassesTryOn: React.FC<JeelizGlassesTryOnProps> = ({
   const occluderMeshRef = useRef<THREE.Group | null>(null);
   const glassesGroupRef = useRef<THREE.Group | null>(null);
   const glassesModelRef = useRef<THREE.Object3D | null>(null);
+  const glassesLocalPoseRef = useRef(new THREE.Vector3());
   const envTextureRef = useRef<THREE.WebGLRenderTarget | null>(null);
 
   // Calibration state: nose bridge click anchor
@@ -390,7 +392,9 @@ export const JeelizGlassesTryOn: React.FC<JeelizGlassesTryOnProps> = ({
                     (anchor?.y ?? -0.15) + fit.verticalOffsetMm * 0.0079,
                     (anchor?.z ?? 0.4) + fit.depthOffsetMm * 0.0079,
                   );
-                  glassesGroupRef.current.scale.setScalar(fit.scale);
+                  const yaw = THREE.MathUtils.clamp(Math.abs(pose.ry), 0, Math.PI / 2);
+                  const sideScaleCompensation = 1 - 0.08 * Math.sin(yaw) ** 2;
+                  glassesGroupRef.current.scale.setScalar(fit.scale * sideScaleCompensation);
                 }
 
                 faceObjectRef.current.visible = true;

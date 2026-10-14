@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { flushSync } from 'react-dom';
 import { SUNGLASSES_CATALOG } from './data/catalog';
 import {
   SunglassesProduct,
@@ -11,6 +12,7 @@ import {
 } from './types';
 import { Header } from './components/Navigation/Header';
 import { Sidebar } from './components/Navigation/Sidebar';
+import { FindYourFitCard } from './components/Navigation/FindYourFitCard';
 import { ViewportContainer } from './components/Viewport/ViewportContainer';
 import { FrameSelectorPanel } from './components/Catalog/FrameSelectorPanel';
 import { InstructionBanner } from './components/Instruction/InstructionBanner';
@@ -95,6 +97,87 @@ export const App: React.FC = () => {
   // Account Drawer state (mini right-side slide-over panel)
   const [isAccountDrawerOpen, setIsAccountDrawerOpen] = useState<boolean>(false);
 
+  // Dark mode theme state (persisted in localStorage)
+  const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
+    try {
+      const local = localStorage.getItem('lumen_theme');
+      if (local) return local === 'dark';
+      return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    } catch {
+      return false;
+    }
+  });
+
+  const isThemeTransitioningRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    try {
+      if (isDarkMode) {
+        document.documentElement.classList.add('dark');
+        localStorage.setItem('lumen_theme', 'dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+        localStorage.setItem('lumen_theme', 'light');
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  }, [isDarkMode]);
+
+  const handleToggleTheme = useCallback(() => {
+    if (isThemeTransitioningRef.current) return;
+    soundEffects.playClick();
+
+    const newDarkMode = !isDarkMode;
+
+    const performThemeUpdate = () => {
+      if (newDarkMode) {
+        document.documentElement.classList.add('dark');
+        try { localStorage.setItem('lumen_theme', 'dark'); } catch {}
+      } else {
+        document.documentElement.classList.remove('dark');
+        try { localStorage.setItem('lumen_theme', 'light'); } catch {}
+      }
+      setIsDarkMode(newDarkMode);
+    };
+
+    const doc = typeof document !== 'undefined' ? document : null;
+    if (!doc) return;
+
+    // Use native View Transitions API if supported (Chrome 111+, Edge 111+, Safari 18+)
+    if (typeof (doc as any).startViewTransition === 'function') {
+      isThemeTransitioningRef.current = true;
+      try {
+        const transition = (doc as any).startViewTransition(() => {
+          flushSync(() => {
+            performThemeUpdate();
+          });
+        });
+        transition.finished
+          .catch(() => {})
+          .finally(() => {
+            isThemeTransitioningRef.current = false;
+          });
+      } catch {
+        // Fallback in case startViewTransition throws unexpectedly
+        doc.documentElement.classList.add('theme-transitioning');
+        performThemeUpdate();
+        setTimeout(() => {
+          doc.documentElement.classList.remove('theme-transitioning');
+          isThemeTransitioningRef.current = false;
+        }, 380);
+      }
+    } else {
+      isThemeTransitioningRef.current = true;
+      doc.documentElement.classList.add('theme-transitioning');
+      performThemeUpdate();
+      setTimeout(() => {
+        doc.documentElement.classList.remove('theme-transitioning');
+        isThemeTransitioningRef.current = false;
+      }, 380);
+    }
+  }, [isDarkMode]);
+
   const [products, setProducts] = useState<SunglassesProduct[]>(SUNGLASSES_CATALOG);
   const [activeProduct, setActiveProduct] = useState<SunglassesProduct>(SUNGLASSES_CATALOG[0]);
   const [variantIndex, setVariantIndex] = useState<number>(0);
@@ -138,6 +221,109 @@ export const App: React.FC = () => {
   const [mirror, setMirror] = useState<boolean>(true);
   const [lightingPreset, setLightingPreset] = useState<LightingPreset>('studio');
   const [isAudioMuted, setIsAudioMuted] = useState<boolean>(false);
+
+  // External try-on state (from Extension or URL parameters)
+  const [externalImportInfo, setExternalImportInfo] = useState<{
+    sourceUrl: string;
+    name: string;
+    brand: string;
+    price?: number;
+  } | null>(null);
+
+  const handleLoadExternalFrame = useCallback(
+    (params: {
+      frame: string;
+      title?: string;
+      brand?: string;
+      price?: number;
+      mode?: TryOnMode;
+    }) => {
+      if (!params.frame) return;
+
+      const newId = `ext-${Date.now()}`;
+      const extProduct: SunglassesProduct = {
+        id: newId,
+        name: params.title || 'Online Sunglasses Frame',
+        brand: params.brand || 'Web Store',
+        modelCode: 'EXT-TRYON-VTO',
+        thumbnailUrl: params.frame,
+        customFrameUrl: params.frame,
+        isExternal: true,
+        externalSourceUrl: params.frame,
+        category: 'Wayfarer',
+        price: params.price || 199,
+        badge: 'Web Import',
+        rating: 5.0,
+        reviewsCount: 1,
+        description: `Imported via Anywhere Sunglasses Extension from ${params.brand || 'online store'}. Full 3D/AR face tracking and occlusion active.`,
+        frameMaterial: 'Extracted Product Frame',
+        polarized: true,
+        uvProtection: 'UV400',
+        suitableFaceShapes: ['Oval', 'Round', 'Square', 'Heart', 'Diamond'],
+        dimensions: {
+          lensWidth: 54,
+          bridgeWidth: 18,
+          templeLength: 140,
+        },
+        activeVariantIndex: 0,
+        variants: [
+          {
+            name: 'Original Web Photo',
+            frameHex: '#18181b',
+            lensHex: '#09090b',
+            metalness: 0.1,
+            roughness: 0.2,
+          },
+        ],
+        pbr: {
+          frameMetalness: 0.1,
+          frameRoughness: 0.2,
+          lensTransmission: 0.8,
+          lensRoughness: 0.05,
+          lensIor: 1.52,
+          lensReflectivity: 0.85,
+        },
+        svgPreview: '',
+      };
+
+      setProducts((prev) => {
+        const filtered = prev.filter((p) => !p.id.startsWith('ext-'));
+        return [extProduct, ...filtered];
+      });
+      setActiveProduct(extProduct);
+      setVariantIndex(0);
+      setDetailId(null);
+      setExternalImportInfo({
+        sourceUrl: params.frame,
+        name: params.title || 'Online Frame',
+        brand: params.brand || 'Web Store',
+        price: params.price,
+      });
+
+      if (params.mode === 'photo') {
+        setPhotoPage(true);
+        window.location.hash = 'photo';
+        setActiveNav('upload-photos');
+        setCameraEnabled(false);
+        setMode('photo');
+      } else {
+        setPhotoPage(false);
+        setMode('webcam');
+        setCameraEnabled(true);
+        setActiveNav('try-on');
+        setCameraState({ message: 'Starting camera…', error: '' });
+        setCameraSession((n) => n + 1);
+      }
+
+      setToastNotification({
+        id: String(Date.now()),
+        title: 'Anywhere Frame Imported!',
+        productName: `${params.brand ? params.brand + ' ' : ''}${params.title || 'Sunglasses'}`,
+        dataUrl: params.frame,
+      });
+    },
+    []
+  );
 
   // Modals state
   const [isFitAdvisorOpen, setIsFitAdvisorOpen] = useState<boolean>(false);
@@ -242,6 +428,66 @@ export const App: React.FC = () => {
     window.addEventListener('hashchange', sync);
     return () => window.removeEventListener('hashchange', sync);
   }, []);
+
+  // Check for external extension try-on requests via URL, PostMessage, and LocalStorage
+  useEffect(() => {
+    const checkExternalUrl = () => {
+      let params: URLSearchParams | null = null;
+      if (window.location.hash.includes('?')) {
+        params = new URLSearchParams(window.location.hash.slice(window.location.hash.indexOf('?') + 1));
+      } else if (window.location.search) {
+        params = new URLSearchParams(window.location.search);
+      }
+      if (params) {
+        const frame = params.get('frame') || params.get('image') || params.get('url');
+        if (frame) {
+          handleLoadExternalFrame({
+            frame,
+            title: params.get('title') || params.get('name') || undefined,
+            brand: params.get('brand') || params.get('site') || undefined,
+            price: params.get('price') ? parseFloat(params.get('price')!) : undefined,
+            mode: params.get('mode') === 'photo' ? 'photo' : 'webcam',
+          });
+        }
+      }
+    };
+
+    checkExternalUrl();
+    window.addEventListener('hashchange', checkExternalUrl);
+
+    try {
+      const pending = localStorage.getItem('lumen_pending_external_frame');
+      if (pending) {
+        localStorage.removeItem('lumen_pending_external_frame');
+        const parsed = JSON.parse(pending);
+        if (parsed?.frame) handleLoadExternalFrame(parsed);
+      }
+    } catch {}
+
+    const handleMessage = (event: MessageEvent) => {
+      if (event.data?.type === 'LUMEN_TRYON_FRAME' && event.data?.frame) {
+        handleLoadExternalFrame(event.data);
+      }
+    };
+    window.addEventListener('message', handleMessage);
+
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === 'lumen_pending_external_frame' && event.newValue) {
+        try {
+          const parsed = JSON.parse(event.newValue);
+          localStorage.removeItem('lumen_pending_external_frame');
+          if (parsed?.frame) handleLoadExternalFrame(parsed);
+        } catch {}
+      }
+    };
+    window.addEventListener('storage', handleStorage);
+
+    return () => {
+      window.removeEventListener('hashchange', checkExternalUrl);
+      window.removeEventListener('message', handleMessage);
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, [handleLoadExternalFrame]);
 
   useEffect(() => {
     const product = products.find((p) => p.id === detailId);
@@ -473,7 +719,14 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-[#f4f5fa] text-[#161132] font-sans flex flex-col justify-between selection:bg-[#6355f6] selection:text-white pb-6">
+    <div className={`relative min-h-screen ${isDarkMode ? 'bg-[#070b14]' : 'bg-[#f5f6fb]'} text-[#161132] dark:text-slate-100 font-sans flex flex-col justify-between selection:bg-[#6355f6] selection:text-white pb-6 overflow-x-hidden transition-colors duration-300`}>
+      {/* Ambient Mesh Gradient Glow Orbs (Bluish Dark Premium Atmosphere) */}
+      <div className="fixed top-[-100px] left-[-80px] w-[500px] h-[500px] rounded-full bg-gradient-to-br from-[#6355f6]/12 dark:from-indigo-600/25 to-[#8b5cf6]/5 dark:to-cyan-600/10 blur-3xl pointer-events-none z-0 transition-all duration-700 ease-in-out will-change-transform" />
+      <div className="fixed top-[30%] right-[-100px] w-[550px] h-[550px] rounded-full bg-gradient-to-bl from-[#38bdf8]/10 dark:from-blue-600/20 via-[#818cf8]/6 dark:via-indigo-500/15 to-transparent blur-3xl pointer-events-none z-0 transition-all duration-700 ease-in-out will-change-transform" />
+      <div className="fixed bottom-[-80px] left-[25%] w-[450px] h-[450px] rounded-full bg-gradient-to-tr from-[#ec4899]/8 dark:from-cyan-500/15 via-[#a855f7]/5 dark:via-blue-600/10 to-transparent blur-3xl pointer-events-none z-0 transition-all duration-700 ease-in-out will-change-transform" />
+      {/* Subtle bluish radial sheen in dark mode with smooth opacity fade */}
+      <div className={`fixed inset-0 pointer-events-none bg-[radial-gradient(ellipse_80%_80%_at_50%_-20%,rgba(14,165,233,0.08),rgba(255,255,255,0))] transition-opacity duration-500 ease-in-out z-0 ${isDarkMode ? 'opacity-100' : 'opacity-0'}`} />
+
       {/* 1. Top Navigation Bar */}
       <Header
         activeNav={activeNav}
@@ -482,10 +735,48 @@ export const App: React.FC = () => {
         onToggleAudio={handleToggleAudio}
         onOpenProfile={() => setIsAccountDrawerOpen(true)}
         currentUser={currentUser}
+        isDarkMode={isDarkMode}
+        onToggleTheme={handleToggleTheme}
       />
 
       {/* 2. Main Page Layout */}
-      <main className="w-full max-w-[1440px] mx-auto px-4 sm:px-6 flex-1 flex flex-col gap-5 mt-2">
+      <main className="relative z-10 w-full max-w-[1440px] mx-auto px-3 sm:px-6 flex-1 flex flex-col gap-4 sm:gap-5 mt-1 sm:mt-2">
+        {externalImportInfo && (
+          <div className="flex items-center justify-between gap-3 px-5 py-3 rounded-2xl bg-gradient-to-r from-violet-950/85 via-purple-900/70 to-slate-900/85 border border-violet-500/30 text-white backdrop-blur-xl shadow-[0_8px_32px_rgba(109,40,217,0.25)] animate-in fade-in slide-in-from-top-2 duration-300">
+            <div className="flex items-center gap-3 text-sm flex-wrap">
+              <span className="flex h-3 w-3 relative">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+              </span>
+              <div className="flex items-center gap-2">
+                <span className="font-semibold text-violet-300">⚡ Anywhere Try-On:</span>
+                <span className="font-medium text-white">
+                  {externalImportInfo.brand} · {externalImportInfo.name}
+                </span>
+              </div>
+              <span className="text-xs px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-medium">
+                Live AR 3D Tracking
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => changeMode(mode === 'webcam' ? 'photo' : 'webcam')}
+                className="text-xs px-3 py-1.5 rounded-lg bg-violet-600/40 hover:bg-violet-600/60 text-violet-200 border border-violet-400/30 font-medium transition-all"
+              >
+                Switch to {mode === 'webcam' ? 'Photo Mode' : 'Webcam AR'}
+              </button>
+              <button
+                onClick={() => {
+                  setExternalImportInfo(null);
+                  setActiveProduct(SUNGLASSES_CATALOG[0]);
+                }}
+                className="text-xs px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-gray-300 font-medium transition-all"
+              >
+                Reset to Catalog
+              </button>
+            </div>
+          </div>
+        )}
         {activeNav === 'gallery' ? (
           <GalleryPage
             savedLooks={savedLooks}
@@ -511,19 +802,18 @@ export const App: React.FC = () => {
             onTryOn={closeDetails}
           />
         ) : (
-          /* Core 1:1 Layout from Reference Screenshot */
-          <div className="flex flex-col lg:flex-row gap-5 items-stretch">
-            {/* Left Column: Navigation Sidebar + Bottom Promotional Card */}
-            <Sidebar
-              activeTab={activeNav}
-              onTabChange={handleNavChange}
-              onOpenPromo={handleOpenGlassFinder}
-            />
+          /* Main 2-Row Layout */
+          <div className="flex flex-col gap-5">
+            {/* Upper Row: Left Sidebar (Nav) + Right (Camera Viewport & Frame Selector) */}
+            <div className="flex flex-col lg:flex-row gap-5 items-stretch">
+              {/* Left Column: Navigation Sidebar */}
+              <Sidebar
+                activeTab={activeNav}
+                onTabChange={handleNavChange}
+              />
 
-            {/* Right Main Content: Viewport & Frame Selection + Bottom Instruction Banner */}
-            <div className="flex-1 flex flex-col gap-5 min-w-0">
-              {/* Upper Row: Live Camera Preview & Select Your Frame */}
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-stretch">
+              {/* Right: Live Camera Preview & Select Your Frame */}
+              <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-5 items-stretch min-w-0">
                 {/* Center: Large Rounded Camera Preview with Corner Brackets & Controls */}
                 <div className="lg:col-span-7 flex flex-col h-full min-h-0">
                   <ViewportContainer
@@ -534,6 +824,7 @@ export const App: React.FC = () => {
                     cameraEnabled={cameraEnabled}
                     onEnableCamera={enableCamera}
                     cameraSession={cameraSession}
+                    cameraError={cameraState.error}
                     onCameraStateChange={(message, error) =>
                       setCameraState({ message, error })
                     }
@@ -575,14 +866,24 @@ export const App: React.FC = () => {
                   />
                 </div>
               </div>
+            </div>
 
-              {/* Lower Row: Wide Instruction Banner with 4 Steps & Find Your Perfect Fit */}
-              <InstructionBanner
-                onOpenFitAdvisor={handleOpenGlassFinder}
-                cameraEnabled={cameraEnabled}
-                onEnableCamera={enableCamera}
-                onOpenGallery={() => handleNavChange('gallery')}
-              />
+            {/* Lower Row: Parallel Alignment - Left ("Find Your Perfect Fit" Card) + Right ("Interactive Try-On" Banner) */}
+            <div className="flex flex-col lg:flex-row gap-5 items-stretch">
+              {/* Left Column: Find Your Perfect Fit Card (Parallel with Instruction Banner) */}
+              <div className="w-full lg:w-[210px] xl:w-[224px] flex-shrink-0 flex flex-col">
+                <FindYourFitCard onOpenFitAdvisor={handleOpenGlassFinder} />
+              </div>
+
+              {/* Right Column: Wide Instruction Banner with 4 Interactive Try-On Steps */}
+              <div className="flex-1 min-w-0">
+                <InstructionBanner
+                  cameraEnabled={cameraEnabled}
+                  cameraError={cameraState.error}
+                  onEnableCamera={enableCamera}
+                  onOpenGallery={() => handleNavChange('gallery')}
+                />
+              </div>
             </div>
           </div>
         )}

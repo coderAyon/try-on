@@ -139,7 +139,7 @@ export const LandmarkGlassesTryOn: React.FC<JeelizGlassesTryOnProps & { onCamera
           const withinDropoutGrace = lastGoodPoseAt > 0 && now - lastGoodPoseAt < 140;
           if (!withinDropoutGrace) { root.visible = false; faceMask.visible = false; skull.visible = false; }
           if (!withinDropoutGrace && ++lostFrames === 1) {
-            setDetected(false); measurementSampler.reset(); poseStabilizer.reset();
+            setDetected(false); measurementSampler.reset(); poseStabilizer.reset(); rig?.resetFitRatio();
             propsRef.current.onStatsUpdate?.({ fps: currentFps, faceDetected: false, landmarksCount: 0, estimatedIpdMm: 63,
               trackingConfidence: 0, depthOcclusionActive: false, headYaw: 0, headPitch: 0, headRoll: 0 });
           }
@@ -235,7 +235,16 @@ export const LandmarkGlassesTryOn: React.FC<JeelizGlassesTryOnProps & { onCamera
   const flip = props.mirror !== false ? '-scale-x-100' : '';
   return <div ref={containerRef} className="relative w-full h-full bg-black overflow-hidden">
     <canvas ref={backgroundRef} id="landmarkCameraCanvas" className={`absolute inset-0 w-full h-full ${flip}`} />
-    <canvas ref={overlayRef} id="landmarkGlassesCanvas" className={`absolute inset-0 w-full h-full pointer-events-none ${flip}`} />
+    <canvas
+      ref={overlayRef}
+      id="landmarkGlassesCanvas"
+      style={
+        props.splitPosition !== undefined && props.splitPosition < 100
+          ? { clipPath: `polygon(${props.splitPosition}% 0, 100% 0, 100% 100%, ${props.splitPosition}% 100%)` }
+          : undefined
+      }
+      className={`absolute inset-0 w-full h-full pointer-events-none ${flip}`}
+    />
     {status && !error && <div className={previewReady ? 'absolute top-4 right-16 z-20 rounded-full bg-black/75 px-3 py-1.5 text-xs text-white' : 'absolute inset-0 z-20 flex items-center justify-center bg-black/70 text-sm text-white'}>{status}</div>}
     {error && <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-4 bg-black/90 p-6 text-white">
       <p className="text-sm text-center" role="alert">{error}</p><button className="rounded-lg bg-white px-4 py-2 text-black" onClick={() => setRetry(value => value + 1)}>Retry camera</button><button className="text-sm underline" onClick={() => props.onSwitchMode?.('photo')}>Use a photo instead</button>

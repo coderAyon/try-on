@@ -121,7 +121,11 @@ export class StableEyewearPose {
     if (reacquiring) this.headToEyeRatio = headSpan ? pose.eyeSpan / headSpan : 1;
     if (reacquiring) this.headToFaceRatio = pose.scaleFaceWidth && pose.scaleFaceWidth > 8
       ? pose.faceWidth / pose.scaleFaceWidth : 1;
-    const measuredSpan = headSpan ? headSpan * this.headToEyeRatio : pose.eyeSpan;
+    const templeSpan = headSpan ? headSpan * this.headToEyeRatio : pose.eyeSpan;
+    const measuredSpan = Math.max(templeSpan, pose.eyeSpan);
+    if (headSpan && pose.eyeSpan > templeSpan && (pose.isFrontal !== false || !reacquiring)) {
+      this.headToEyeRatio = Math.max(this.headToEyeRatio, pose.eyeSpan / headSpan);
+    }
     const measuredFaceWidth = pose.scaleFaceWidth && pose.scaleFaceWidth > 8
       ? pose.scaleFaceWidth * this.headToFaceRatio : pose.faceWidth;
     // Preserve the detector's current face shape at oblique angles. Replaying
@@ -142,14 +146,14 @@ export class StableEyewearPose {
       }
     } else this.surface = null;
     if (reacquiring) this.browRatio = undefined;
-    if (pose.browHeight !== undefined && (reacquiring || pose.isFrontal !== false)) {
-      const measuredBrowRatio = pose.browHeight / measuredSpan;
-      this.browRatio = reacquiring || this.browRatio === undefined ? measuredBrowRatio
-        : THREE.MathUtils.lerp(this.browRatio, measuredBrowRatio, alpha(.8));
+    // Eyebrow landmarks are expressive and move independently of the nose and
+    // eyes. Lock their contribution after acquisition so a brow raise cannot
+    // pull the sunglasses up or down. A new face/dropout reacquires a baseline.
+    if (reacquiring && pose.browHeight !== undefined) {
+      this.browRatio = pose.browHeight / measuredSpan;
     }
-    if (reacquiring || pose.isFrontal !== false) {
-      this.liftRatio = reacquiring ? (pose.eyeLift ?? measuredSpan * .08) / measuredSpan
-        : THREE.MathUtils.lerp(this.liftRatio, (pose.eyeLift ?? measuredSpan * .08) / measuredSpan, alpha(.8));
+    if (reacquiring) {
+      this.liftRatio = (pose.eyeLift ?? measuredSpan * .08) / measuredSpan;
     }
     const offset = pose.position.clone().sub(pose.bridge).applyQuaternion(pose.quaternion.clone().invert()).divideScalar(measuredSpan);
 
@@ -186,8 +190,8 @@ export class StableEyewearPose {
       // Alternating small detector errors must not open the movement filter.
       // Coherent turns and larger movements retain the existing fast response.
       const stationaryRotation = this.coherentAngularSamples < 2 && rotSpeed < .45 && this.rotation.angleTo(pose.quaternion) < .045;
-      const rotCutoff = stationaryRotation ? 1.2
-        : 1.2 + Math.max(0, rotSpeed - 0.03) * 4.5 + Math.min(2.8, rotSpeed * 2.8);
+      const rotCutoff = stationaryRotation ? 0.48
+        : 0.9 + Math.max(0, rotSpeed - 0.03) * 3.4 + Math.min(2.1, rotSpeed * 2.1);
       // Keep some smoothing active even during a nod; a fast detector sample
       // should not make the complete frame snap to a noisy landmark estimate.
       this.rotation.slerp(pose.quaternion, alpha(Math.min(6.5, rotCutoff)));
@@ -195,9 +199,16 @@ export class StableEyewearPose {
       this.bridgeVelocity.lerp(bridgeDerivative, alpha(3));
       const speed = this.bridgeVelocity.length();
       const displacement = this.bridge!.distanceTo(pose.bridge) / Math.max(8, measuredSpan);
-      const posCutoff = displacement < .015 ? 1.4
-        : 1.4 + Math.max(0, speed - 0.02) * 9 + Math.max(0, displacement - 0.01) * 40;
-      this.localAnchor.lerp(offset, alpha(0.8));
+      const posCutoff = displacement < .015 ? 0.9
+        : 0.95 + Math.max(0, speed - 0.02) * 7 + Math.max(0, displacement - 0.01) * 30;
+      // Calibrate the model origin from a reliable frontal view.  In profile
+      // the visible eye midpoint moves because one eye is occluded; updating
+      // the local origin from that midpoint makes the whole frame detach and
+      // jump.  During a turn, keep this calibrated offset and follow only the
+      // stable nasal bridge below.
+      if (pose.isFrontal !== false) {
+        this.localAnchor.lerp(offset, alpha(0.8));
+      }
 
       // 2. Continuous Adaptive One-Euro Scale Filter (Butter-smooth zoom in/out + rock-solid stationary lock)
       // Low-pass filtered derivative (cutoff 0.85 Hz) prevents detector frame-to-frame noise from spiking velocity
@@ -216,15 +227,23 @@ export class StableEyewearPose {
       const scaleRotSpeed = pose.scaleAxis ? this.scaleAngularSpeed : rotSpeed;
       const rotDamping = 1.0 / (1.0 + Math.max(0, scaleRotSpeed - 0.03) * 10.0);
 
+      const spanDisplacement = Math.abs(measuredSpan - this.span) / Math.max(8, this.span);
+      const displacementBonus = Math.max(0, spanDisplacement - 0.012) * 26.0;
+
       // Adaptive cutoff frequency:
-      // - Stationary lock (zoomSpeed === 0): cutoff = 0.38 Hz guarantees rock-solid, zero-tremor stability ("kapakapi kora jabe na")
-      // - Active zoom (zoomSpeed > 0): smoothly scales cutoff up to 4.5+ Hz for fluid, lag-free zoom in/out
-      const spanCutoff = 0.38 + zoomSpeed * 28.0 * rotDamping;
-      this.span += (measuredSpan - this.span) * alpha(spanCutoff);
+      // - Stationary lock (zoomSpeed === 0, displacement < 1.2%): cutoff = 0.38 Hz guarantees rock-solid, zero-tremor stability ("kapakapi kora jabe na")
+      // - Active zoom / approach response: smoothly scales cutoff up to 4.5+ Hz for fluid, instant zoom in/out
+      const spanCutoff = 0.38 + (zoomSpeed * 28.0 + displacementBonus) * rotDamping;
+
+      const isExpanding = measuredSpan >= this.span;
+      const isExtremeProfile = pose.isFrontal === false && Math.abs(rotSpeed) > 0.45;
+      if (isExpanding || pose.isFrontal !== false || !isExtremeProfile) {
+        this.span += (measuredSpan - this.span) * alpha(Math.min(7.0, spanCutoff));
+      }
 
       // Keep the translation filter independent: position noise must not open
       // the rotation filter and amplify wobble when the head is moving.
-      this.bridge!.lerp(pose.bridge, alpha(Math.min(9.5, posCutoff)));
+      this.bridge!.lerp(pose.bridge, alpha(Math.min(7, posCutoff)));
     }
 
     this.previousBridge.copy(pose.bridge);
@@ -479,16 +498,20 @@ export class EyewearRig {
     }
   }
   fittedScale(eyeSpan: number, faceWidth: number, isFrontal = true) {
-    // Smooth proportions only; distance and pose remain immediate.
+    // Learn the current wearer's facial proportion independently of camera
+    // distance. A rig can stay mounted while different people take turns, so
+    // a large ratio jump must be treated as a new face rather than as noise.
     const ratio = THREE.MathUtils.clamp(faceWidth / Math.max(1, eyeSpan), 1.8, 2.8);
     if (this.fitRatio === null) {
       this.fitRatio = ratio;
     } else if (isFrontal) {
-      // Calibrate face-to-eye width proportion during frontal view
-      this.fitRatio += (ratio - this.fitRatio) * 0.035;
+      const delta = Math.abs(ratio - this.fitRatio);
+      const learningRate = delta > 0.18 ? 0.24 : 0.06;
+      this.fitRatio += (ratio - this.fitRatio) * learningRate;
     }
     return eyeSpan * Math.max(1 / this.eyeDistance, this.fitRatio * 1.04 / this.frontWidth) * frameFitScale(this.productId);
   }
+  resetFitRatio() { this.fitRatio = null; }
   fittedPosition(pose: EyewearPose, scale: number) {
     const position = pose.position.clone();
     if (this.lensTop === undefined) {
@@ -531,8 +554,7 @@ export class EyewearRig {
       const ratio = Math.min(Math.max(0, clearance) / pose.eyeSpan, .06);
       // Move immediately when skin would occlude the lens; release gradually
       // to keep the glasses face-locked as the cheek contour changes in 3D.
-      this.clearanceRatio = ratio > this.clearanceRatio ? ratio
-        : THREE.MathUtils.lerp(this.clearanceRatio, ratio, .08);
+      this.clearanceRatio = THREE.MathUtils.lerp(this.clearanceRatio, ratio, ratio > this.clearanceRatio ? .12 : .035);
       position.addScaledVector(pose.zAxis, this.clearanceRatio * pose.eyeSpan);
     }
     return position;

@@ -123,19 +123,19 @@ export const AccountDrawer: React.FC<AccountDrawerProps> = ({
           role="dialog"
           aria-modal="true"
           aria-label="Account and Profile Settings"
-          className="w-screen max-w-[390px] sm:max-w-[410px] bg-white border-l border-[#eceaf5] shadow-[-12px_0_40px_rgba(26,20,56,0.14)] flex flex-col justify-between overflow-y-auto"
+          className="w-screen max-w-[390px] sm:max-w-[410px] bg-white dark:bg-[#0c1322] border-l border-[#eceaf5] dark:border-blue-900/40 shadow-[-12px_0_40px_rgba(26,20,56,0.14)] dark:shadow-[-12px_0_40px_rgba(3,7,18,0.8)] flex flex-col justify-between overflow-y-auto text-[#181236] dark:text-slate-100"
         >
           {/* Top Bar / Header */}
-          <div className="p-5 sm:p-6 border-b border-[#f0edf7] flex items-center justify-between bg-gradient-to-r from-white via-[#faf9ff] to-white">
+          <div className="p-5 sm:p-6 border-b border-[#f0edf7] dark:border-blue-900/40 flex items-center justify-between bg-gradient-to-r from-white via-[#faf9ff] to-white dark:from-[#0c1322] dark:via-[#0e172a] dark:to-[#0c1322]">
             <div className="flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-xl bg-[#6355f6]/10 text-[#6355f6] flex items-center justify-center border border-[#6355f6]/20 shadow-sm">
+              <div className="w-8 h-8 rounded-xl bg-[#6355f6]/10 dark:bg-cyan-500/20 text-[#6355f6] dark:text-cyan-300 flex items-center justify-center border border-[#6355f6]/20 dark:border-cyan-500/30 shadow-sm">
                 <Sparkles size={17} strokeWidth={2.3} />
               </div>
               <div>
-                <h3 className="text-[15px] font-bold text-[#181236] leading-none">
+                <h3 className="text-[15px] font-bold text-[#181236] dark:text-white leading-none">
                   {currentUser ? 'My Profile' : 'Lumen Account'}
                 </h3>
-                <span className="text-[11px] text-[#71698e] font-medium">
+                <span className="text-[11px] text-[#71698e] dark:text-slate-400 font-medium">
                   {currentUser ? 'Studio Member' : 'Sign in to sync your lookbook'}
                 </span>
               </div>
@@ -147,7 +147,7 @@ export const AccountDrawer: React.FC<AccountDrawerProps> = ({
                 onClose();
               }}
               aria-label="Close Account Panel"
-              className="w-8 h-8 rounded-full bg-[#f4f2fb] hover:bg-[#eae6f7] text-[#4d456a] hover:text-[#181236] flex items-center justify-center transition-all cursor-pointer"
+              className="w-8 h-8 rounded-full bg-[#f4f2fb] dark:bg-[#131d33] hover:bg-[#eae6f7] dark:hover:bg-[#1b2847] text-[#4d456a] dark:text-slate-300 hover:text-[#181236] dark:hover:text-white flex items-center justify-center transition-all cursor-pointer"
             >
               <X size={17} strokeWidth={2.2} />
             </button>
@@ -155,15 +155,15 @@ export const AccountDrawer: React.FC<AccountDrawerProps> = ({
 
           {/* Success Banner */}
           {successMsg && (
-            <div className="mx-5 mt-4 p-3 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center gap-2 text-emerald-800 text-[12px] font-medium animate-in slide-in-from-top-2">
-              <CheckCircle2 size={16} className="text-emerald-600 flex-shrink-0" />
+            <div className="mx-5 mt-4 p-3 bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 rounded-xl flex items-center gap-2 text-emerald-800 dark:text-emerald-300 text-[12px] font-medium animate-in slide-in-from-top-2">
+              <CheckCircle2 size={16} className="text-emerald-600 dark:text-emerald-400 flex-shrink-0" />
               <span>{successMsg}</span>
             </div>
           )}
 
           {/* Error Banner */}
           {errorMsg && (
-            <div className="mx-5 mt-4 p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-700 text-[12px] font-medium animate-in slide-in-from-top-2">
+            <div className="mx-5 mt-4 p-3 bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-800 rounded-xl text-rose-700 dark:text-rose-300 text-[12px] font-medium animate-in slide-in-from-top-2">
               {errorMsg}
             </div>
           )}
@@ -176,20 +176,20 @@ export const AccountDrawer: React.FC<AccountDrawerProps> = ({
                  ========================================================= */
               <div className="flex flex-col gap-5">
                 {/* User Identity Card */}
-                <div className="p-4 rounded-2xl bg-gradient-to-br from-[#f8f7ff] via-[#f2efff] to-[#ebe7fe] border border-[#e2dcfc] shadow-sm flex items-center gap-3.5">
-                  <div className="w-13 h-13 rounded-2xl bg-[#6355f6] text-white flex items-center justify-center text-lg font-bold shadow-md shadow-[#6355f6]/25 flex-shrink-0">
+                <div className="p-4 rounded-2xl bg-gradient-to-br from-[#f8f7ff] via-[#f2efff] to-[#ebe7fe] dark:from-[#131d35] dark:via-[#0e172a] dark:to-[#131d35] border border-[#e2dcfc] dark:border-blue-900/50 shadow-sm flex items-center gap-3.5">
+                  <div className="w-13 h-13 rounded-2xl bg-[#6355f6] dark:bg-cyan-500 text-white dark:text-slate-950 flex items-center justify-center text-lg font-bold shadow-md shadow-[#6355f6]/25 flex-shrink-0">
                     {currentUser.name.charAt(0).toUpperCase()}
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-1.5 mb-0.5">
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#6355f6]/15 text-[#6355f6] border border-[#6355f6]/20">
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#6355f6]/15 dark:bg-cyan-500/20 text-[#6355f6] dark:text-cyan-300 border border-[#6355f6]/20 dark:border-cyan-500/30">
                         VIP Visionary
                       </span>
                     </div>
-                    <h4 className="text-[15px] font-bold text-[#1a1438] truncate leading-tight">
+                    <h4 className="text-[15px] font-bold text-[#1a1438] dark:text-white truncate leading-tight">
                       {currentUser.name}
                     </h4>
-                    <p className="text-[11.5px] text-[#696287] truncate">
+                    <p className="text-[11.5px] text-[#696287] dark:text-slate-400 truncate">
                       {currentUser.email}
                     </p>
                   </div>
@@ -203,40 +203,40 @@ export const AccountDrawer: React.FC<AccountDrawerProps> = ({
                       onClose();
                       onOpenGallery?.();
                     }}
-                    className="p-3.5 rounded-2xl bg-[#f8f7fc] border border-[#ebe7f5] hover:border-[#6355f6]/40 hover:bg-[#f3f0fd] transition-all text-left cursor-pointer group"
+                    className="p-3.5 rounded-2xl bg-[#f8f7fc] dark:bg-[#0e1628] border border-[#ebe7f5] dark:border-blue-950/70 hover:border-[#6355f6]/40 dark:hover:border-cyan-500/40 hover:bg-[#f3f0fd] dark:hover:bg-[#131d35] transition-all text-left cursor-pointer group"
                   >
-                    <div className="flex items-center justify-between text-[#6355f6] mb-1.5">
+                    <div className="flex items-center justify-between text-[#6355f6] dark:text-cyan-400 mb-1.5">
                       <Camera size={18} />
-                      <span className="text-[10px] font-bold text-[#71698e] group-hover:text-[#6355f6]">
+                      <span className="text-[10px] font-bold text-[#71698e] dark:text-slate-400 group-hover:text-[#6355f6] dark:group-hover:text-cyan-300">
                         View →
                       </span>
                     </div>
-                    <div className="text-[18px] font-extrabold text-[#191338]">
+                    <div className="text-[18px] font-extrabold text-[#191338] dark:text-white">
                       {savedLooksCount}
                     </div>
-                    <div className="text-[11px] font-medium text-[#655d82]">
+                    <div className="text-[11px] font-medium text-[#655d82] dark:text-slate-400">
                       Saved Snaps in Gallery
                     </div>
                   </button>
 
-                  <div className="p-3.5 rounded-2xl bg-[#f8f7fc] border border-[#ebe7f5] text-left">
+                  <div className="p-3.5 rounded-2xl bg-[#f8f7fc] dark:bg-[#0e1628] border border-[#ebe7f5] dark:border-blue-950/70 text-left">
                     <div className="flex items-center justify-between text-rose-500 mb-1.5">
                       <Heart size={18} />
-                      <span className="text-[10px] font-bold text-[#71698e]">
+                      <span className="text-[10px] font-bold text-[#71698e] dark:text-slate-400">
                         Catalog
                       </span>
                     </div>
-                    <div className="text-[18px] font-extrabold text-[#191338]">
+                    <div className="text-[18px] font-extrabold text-[#191338] dark:text-white">
                       {wishlistCount}
                     </div>
-                    <div className="text-[11px] font-medium text-[#655d82]">
+                    <div className="text-[11px] font-medium text-[#655d82] dark:text-slate-400">
                       Wishlist Favorites
                     </div>
                   </div>
                 </div>
 
                 {/* Preferences Details */}
-                <div className="p-4 rounded-2xl bg-white border border-[#eae6f5] shadow-sm flex flex-col gap-2.5">
+                <div className="p-4 rounded-2xl bg-white dark:bg-[#0e1628] border border-[#eae6f5] dark:border-blue-950/70 shadow-sm flex flex-col gap-2.5">
                   <span className="text-[11px] font-bold uppercase tracking-wider text-[#797199]">
                     Try-On Preferences
                   </span>
@@ -283,7 +283,7 @@ export const AccountDrawer: React.FC<AccountDrawerProps> = ({
                  ========================================================= */
               <div className="flex flex-col gap-5">
                 {/* Tab Switcher: Sign In vs Sign Up */}
-                <div className="grid grid-cols-2 p-1 bg-[#f1eff9] rounded-xl border border-[#e8e4f5]">
+                <div className="grid grid-cols-2 p-1 bg-[#f1eff9] dark:bg-[#131d33] rounded-xl border border-[#e8e4f5] dark:border-blue-900/40">
                   <button
                     type="button"
                     onClick={() => {
@@ -293,8 +293,8 @@ export const AccountDrawer: React.FC<AccountDrawerProps> = ({
                     }}
                     className={`py-2 text-[12.5px] font-bold rounded-lg transition-all cursor-pointer ${
                       tab === 'signin'
-                        ? 'bg-white text-[#6355f6] shadow-sm'
-                        : 'text-[#615a81] hover:text-[#181236]'
+                        ? 'bg-white dark:bg-[#1b2847] text-[#6355f6] dark:text-cyan-300 shadow-sm'
+                        : 'text-[#615a81] dark:text-slate-400 hover:text-[#181236] dark:hover:text-white'
                     }`}
                   >
                     Sign In
@@ -308,8 +308,8 @@ export const AccountDrawer: React.FC<AccountDrawerProps> = ({
                     }}
                     className={`py-2 text-[12.5px] font-bold rounded-lg transition-all cursor-pointer ${
                       tab === 'signup'
-                        ? 'bg-white text-[#6355f6] shadow-sm'
-                        : 'text-[#615a81] hover:text-[#181236]'
+                        ? 'bg-white dark:bg-[#1b2847] text-[#6355f6] dark:text-cyan-300 shadow-sm'
+                        : 'text-[#615a81] dark:text-slate-400 hover:text-[#181236] dark:hover:text-white'
                     }`}
                   >
                     Create Account
@@ -321,7 +321,7 @@ export const AccountDrawer: React.FC<AccountDrawerProps> = ({
                   <form onSubmit={handleSignIn} className="flex flex-col gap-3.5">
                     {/* Email Input */}
                     <div>
-                      <label className="block text-[11px] font-bold text-[#443c64] uppercase tracking-wider mb-1.5">
+                      <label className="block text-[11px] font-bold text-[#443c64] dark:text-slate-300 uppercase tracking-wider mb-1.5">
                         Email Address
                       </label>
                       <div className="relative">
@@ -335,7 +335,7 @@ export const AccountDrawer: React.FC<AccountDrawerProps> = ({
                           value={email}
                           onChange={(e) => setEmail(e.target.value)}
                           placeholder="you@example.com"
-                          className="w-full pl-10 pr-3.5 py-2.5 rounded-xl border border-[#e2dff0] text-[13px] text-[#1b153b] placeholder-[#a69fc0] focus:outline-none focus:border-[#6355f6] focus:ring-2 focus:ring-[#6355f6]/15 transition-all bg-[#faf9fe]"
+                          className="w-full pl-10 pr-3.5 py-2.5 rounded-xl border border-[#e2dff0] dark:border-blue-900/40 text-[13px] text-[#1b153b] dark:text-slate-100 placeholder-[#a69fc0] dark:placeholder-slate-500 focus:outline-none focus:border-[#6355f6] dark:focus:border-cyan-400 focus:ring-2 focus:ring-[#6355f6]/15 dark:focus:ring-cyan-400/20 transition-all bg-[#faf9fe] dark:bg-[#0e1628]"
                         />
                       </div>
                     </div>
@@ -343,13 +343,13 @@ export const AccountDrawer: React.FC<AccountDrawerProps> = ({
                     {/* Password Input */}
                     <div>
                       <div className="flex items-center justify-between mb-1.5">
-                        <label className="text-[11px] font-bold text-[#443c64] uppercase tracking-wider">
+                        <label className="text-[11px] font-bold text-[#443c64] dark:text-slate-300 uppercase tracking-wider">
                           Password
                         </label>
                         <button
                           type="button"
                           onClick={() => alert('Password reset link will be sent to your email.')}
-                          className="text-[11px] font-semibold text-[#6355f6] hover:underline cursor-pointer"
+                          className="text-[11px] font-semibold text-[#6355f6] dark:text-cyan-400 hover:underline cursor-pointer"
                         >
                           Forgot?
                         </button>
@@ -365,12 +365,12 @@ export const AccountDrawer: React.FC<AccountDrawerProps> = ({
                           value={password}
                           onChange={(e) => setPassword(e.target.value)}
                           placeholder="••••••••"
-                          className="w-full pl-10 pr-10 py-2.5 rounded-xl border border-[#e2dff0] text-[13px] text-[#1b153b] placeholder-[#a69fc0] focus:outline-none focus:border-[#6355f6] focus:ring-2 focus:ring-[#6355f6]/15 transition-all bg-[#faf9fe]"
+                          className="w-full pl-10 pr-10 py-2.5 rounded-xl border border-[#e2dff0] dark:border-blue-900/40 text-[13px] text-[#1b153b] dark:text-slate-100 placeholder-[#a69fc0] dark:placeholder-slate-500 focus:outline-none focus:border-[#6355f6] dark:focus:border-cyan-400 focus:ring-2 focus:ring-[#6355f6]/15 dark:focus:ring-cyan-400/20 transition-all bg-[#faf9fe] dark:bg-[#0e1628]"
                         />
                         <button
                           type="button"
                           onClick={() => setShowPassword(!showPassword)}
-                          className="absolute right-3.5 top-1/2 -translate-y-1/2 text-[#8b83aa] hover:text-[#181236] cursor-pointer"
+                          className="absolute right-3.5 top-1/2 -translate-y-1/2 text-[#8b83aa] hover:text-[#181236] dark:hover:text-white cursor-pointer"
                         >
                           {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                         </button>
@@ -384,11 +384,11 @@ export const AccountDrawer: React.FC<AccountDrawerProps> = ({
                         id="rememberMe"
                         checked={rememberMe}
                         onChange={(e) => setRememberMe(e.target.checked)}
-                        className="rounded border-[#d8d3e8] text-[#6355f6] focus:ring-[#6355f6] cursor-pointer"
+                        className="rounded border-[#d8d3e8] text-[#6355f6] dark:text-cyan-400 focus:ring-[#6355f6] cursor-pointer"
                       />
                       <label
                         htmlFor="rememberMe"
-                        className="text-[12px] text-[#595278] font-medium cursor-pointer"
+                        className="text-[12px] text-[#595278] dark:text-slate-400 font-medium cursor-pointer"
                       >
                         Remember my login on this device
                       </label>
@@ -408,7 +408,7 @@ export const AccountDrawer: React.FC<AccountDrawerProps> = ({
                   <form onSubmit={handleSignUp} className="flex flex-col gap-3">
                     {/* Full Name */}
                     <div>
-                      <label className="block text-[11px] font-bold text-[#443c64] uppercase tracking-wider mb-1">
+                      <label className="block text-[11px] font-bold text-[#443c64] dark:text-slate-300 uppercase tracking-wider mb-1">
                         Full Name
                       </label>
                       <div className="relative">
@@ -422,14 +422,14 @@ export const AccountDrawer: React.FC<AccountDrawerProps> = ({
                           value={name}
                           onChange={(e) => setName(e.target.value)}
                           placeholder="Sarah Connor"
-                          className="w-full pl-10 pr-3.5 py-2.5 rounded-xl border border-[#e2dff0] text-[13px] text-[#1b153b] placeholder-[#a69fc0] focus:outline-none focus:border-[#6355f6] focus:ring-2 focus:ring-[#6355f6]/15 transition-all bg-[#faf9fe]"
+                          className="w-full pl-10 pr-3.5 py-2.5 rounded-xl border border-[#e2dff0] dark:border-blue-900/40 text-[13px] text-[#1b153b] dark:text-slate-100 placeholder-[#a69fc0] dark:placeholder-slate-500 focus:outline-none focus:border-[#6355f6] dark:focus:border-cyan-400 focus:ring-2 focus:ring-[#6355f6]/15 dark:focus:ring-cyan-400/20 transition-all bg-[#faf9fe] dark:bg-[#0e1628]"
                         />
                       </div>
                     </div>
 
                     {/* Email */}
                     <div>
-                      <label className="block text-[11px] font-bold text-[#443c64] uppercase tracking-wider mb-1">
+                      <label className="block text-[11px] font-bold text-[#443c64] dark:text-slate-300 uppercase tracking-wider mb-1">
                         Email Address
                       </label>
                       <div className="relative">
@@ -443,14 +443,14 @@ export const AccountDrawer: React.FC<AccountDrawerProps> = ({
                           value={email}
                           onChange={(e) => setEmail(e.target.value)}
                           placeholder="sarah@example.com"
-                          className="w-full pl-10 pr-3.5 py-2.5 rounded-xl border border-[#e2dff0] text-[13px] text-[#1b153b] placeholder-[#a69fc0] focus:outline-none focus:border-[#6355f6] focus:ring-2 focus:ring-[#6355f6]/15 transition-all bg-[#faf9fe]"
+                          className="w-full pl-10 pr-3.5 py-2.5 rounded-xl border border-[#e2dff0] dark:border-blue-900/40 text-[13px] text-[#1b153b] dark:text-slate-100 placeholder-[#a69fc0] dark:placeholder-slate-500 focus:outline-none focus:border-[#6355f6] dark:focus:border-cyan-400 focus:ring-2 focus:ring-[#6355f6]/15 dark:focus:ring-cyan-400/20 transition-all bg-[#faf9fe] dark:bg-[#0e1628]"
                         />
                       </div>
                     </div>
 
                     {/* Password */}
                     <div>
-                      <label className="block text-[11px] font-bold text-[#443c64] uppercase tracking-wider mb-1">
+                      <label className="block text-[11px] font-bold text-[#443c64] dark:text-slate-300 uppercase tracking-wider mb-1">
                         Password
                       </label>
                       <div className="relative">
@@ -465,12 +465,12 @@ export const AccountDrawer: React.FC<AccountDrawerProps> = ({
                           value={password}
                           onChange={(e) => setPassword(e.target.value)}
                           placeholder="Min. 6 characters"
-                          className="w-full pl-10 pr-10 py-2.5 rounded-xl border border-[#e2dff0] text-[13px] text-[#1b153b] placeholder-[#a69fc0] focus:outline-none focus:border-[#6355f6] focus:ring-2 focus:ring-[#6355f6]/15 transition-all bg-[#faf9fe]"
+                          className="w-full pl-10 pr-10 py-2.5 rounded-xl border border-[#e2dff0] dark:border-blue-900/40 text-[13px] text-[#1b153b] dark:text-slate-100 placeholder-[#a69fc0] dark:placeholder-slate-500 focus:outline-none focus:border-[#6355f6] dark:focus:border-cyan-400 focus:ring-2 focus:ring-[#6355f6]/15 dark:focus:ring-cyan-400/20 transition-all bg-[#faf9fe] dark:bg-[#0e1628]"
                         />
                         <button
                           type="button"
                           onClick={() => setShowPassword(!showPassword)}
-                          className="absolute right-3.5 top-1/2 -translate-y-1/2 text-[#8b83aa] hover:text-[#181236] cursor-pointer"
+                          className="absolute right-3.5 top-1/2 -translate-y-1/2 text-[#8b83aa] hover:text-[#181236] dark:hover:text-white cursor-pointer"
                         >
                           {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                         </button>
@@ -479,13 +479,13 @@ export const AccountDrawer: React.FC<AccountDrawerProps> = ({
 
                     {/* Preferred Style */}
                     <div>
-                      <label className="block text-[11px] font-bold text-[#443c64] uppercase tracking-wider mb-1">
+                      <label className="block text-[11px] font-bold text-[#443c64] dark:text-slate-300 uppercase tracking-wider mb-1">
                         Preferred Eyewear Style
                       </label>
                       <select
                         value={preferredStyle}
                         onChange={(e) => setPreferredStyle(e.target.value)}
-                        className="w-full px-3.5 py-2.5 rounded-xl border border-[#e2dff0] text-[13px] text-[#1b153b] focus:outline-none focus:border-[#6355f6] bg-[#faf9fe] cursor-pointer"
+                        className="w-full px-3.5 py-2.5 rounded-xl border border-[#e2dff0] dark:border-blue-900/40 text-[13px] text-[#1b153b] dark:text-slate-100 focus:outline-none focus:border-[#6355f6] dark:focus:border-cyan-400 bg-[#faf9fe] dark:bg-[#0e1628] cursor-pointer"
                       >
                         <option value="Aviator">Aviator (Timeless Iconic)</option>
                         <option value="Wayfarer">Wayfarer (Retro Classic)</option>

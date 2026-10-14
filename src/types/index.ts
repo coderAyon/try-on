@@ -16,6 +16,10 @@ export interface SunglassesProduct {
   brand: string;
   modelCode: string;
   thumbnailUrl?: string;
+  isExternal?: boolean;
+  externalSourceUrl?: string;
+  customFrameUrl?: string;
+  customFrameCutoutUrl?: string;
   model?: {
     path: string;
     nodes?: string[];
