@@ -57,10 +57,13 @@ export function eyewearPose(landmarks: Landmark[], width: number, height: number
     eyeSpan,
     // Temple landmarks are outside the eyelids and do not contract on a blink.
     scaleSpan: world(127).distanceTo(world(356)),
+    // Upper-face height is independent of jaw opening and horizontal depth noise.
+    scaleHeight: world(10).distanceTo(world(168)),
     scaleFaceWidth: Math.abs(world(234).sub(world(454)).dot(headAxis)),
     scaleAxis: headAxis,
     leftTemple: world(127),
     rightTemple: world(356),
+    xAxis,
     zAxis,
     yAxis,
     faceWidth: Math.abs(world(234).sub(world(454)).dot(xAxis)),
@@ -80,13 +83,15 @@ export class StableEyewearPose {
   private headToFaceRatio = 1;
   private previousScaleAxis: THREE.Vector3 | null = null;
   private scaleAngularSpeed = 0;
-  private frontalSpan: number | null = null;
+  private heightToEyeRatio = 1;
   private velocity = new THREE.Vector3();
   private angularDirection = new THREE.Vector3();
   private coherentAngularSamples = 0;
   private bridge: THREE.Vector3 | null = null;
   private previousBridge = new THREE.Vector3();
   private bridgeVelocity = new THREE.Vector3();
+  private previousBridgeDirection = new THREE.Vector3();
+  private coherentBridgeSamples = 0;
   private spanVelocity = 0;
   private time = 0;
   private browRatio: number | undefined;
@@ -105,8 +110,10 @@ export class StableEyewearPose {
     this.angularDirection.set(0, 0, 0);
     this.coherentAngularSamples = 0;
     this.bridgeVelocity.set(0, 0, 0);
+    this.previousBridgeDirection.set(0, 0, 0);
+    this.coherentBridgeSamples = 0;
     this.spanVelocity = 0;
-    this.frontalSpan = null;
+    this.heightToEyeRatio = 1;
     this.headToEyeRatio = 1;
     this.headToFaceRatio = 1;
     this.previousScaleAxis = null;
@@ -121,10 +128,20 @@ export class StableEyewearPose {
     if (reacquiring) this.headToEyeRatio = headSpan ? pose.eyeSpan / headSpan : 1;
     if (reacquiring) this.headToFaceRatio = pose.scaleFaceWidth && pose.scaleFaceWidth > 8
       ? pose.faceWidth / pose.scaleFaceWidth : 1;
+    const heightSpan = pose.scaleHeight > 8 ? pose.scaleHeight : null;
+    if (reacquiring) this.heightToEyeRatio = heightSpan ? pose.eyeSpan / heightSpan : 1;
     const templeSpan = headSpan ? headSpan * this.headToEyeRatio : pose.eyeSpan;
-    const measuredSpan = Math.max(templeSpan, pose.eyeSpan);
-    if (headSpan && pose.eyeSpan > templeSpan && (pose.isFrontal !== false || !reacquiring)) {
-      this.headToEyeRatio = Math.max(this.headToEyeRatio, pose.eyeSpan / headSpan);
+    // Keep facial proportions fixed until reacquisition. Taking a running maximum
+    // of eye/temple ratios permanently enlarged the frame after noisy turns.
+    let measuredSpan = templeSpan;
+    if (heightSpan && headSpan) {
+      const heightEstimate = heightSpan * this.heightToEyeRatio;
+      const angles = new THREE.Euler().setFromQuaternion(pose.quaternion, 'YXZ');
+      // During yaw, estimated temple depth can inflate while upper-face height
+      // stays reliable. Fade this cross-check out during pitch (foreshortening).
+      const yawWeight = Math.sin(angles.y) ** 2 / (Math.sin(angles.y) ** 2 + Math.sin(angles.x) ** 2 + .025);
+      const corroborated = THREE.MathUtils.clamp(templeSpan, heightEstimate * .98, heightEstimate * 1.02);
+      measuredSpan = THREE.MathUtils.lerp(templeSpan, corroborated, yawWeight);
     }
     const measuredFaceWidth = pose.scaleFaceWidth && pose.scaleFaceWidth > 8
       ? pose.scaleFaceWidth * this.headToFaceRatio : pose.faceWidth;
@@ -161,7 +178,7 @@ export class StableEyewearPose {
       this.rotation = pose.quaternion.clone();
       this.localAnchor = offset.clone();
       this.span = measuredSpan;
-      this.frontalSpan = pose.eyeSpan;
+
       this.previousRotation = pose.quaternion.clone();
       this.previousSpan = measuredSpan;
       this.bridge = pose.bridge.clone();
@@ -170,6 +187,8 @@ export class StableEyewearPose {
       this.angularDirection.set(0, 0, 0);
       this.coherentAngularSamples = 0;
       this.bridgeVelocity.set(0, 0, 0);
+      this.previousBridgeDirection.set(0, 0, 0);
+      this.coherentBridgeSamples = 0;
       this.spanVelocity = 0;
       this.previousScaleAxis = pose.scaleAxis?.clone() ?? null;
       this.scaleAngularSpeed = 0;
@@ -196,6 +215,9 @@ export class StableEyewearPose {
       // should not make the complete frame snap to a noisy landmark estimate.
       this.rotation.slerp(pose.quaternion, alpha(Math.min(6.5, rotCutoff)));
       const bridgeDerivative = pose.bridge.clone().sub(this.previousBridge).divideScalar(dt * measuredSpan);
+      this.coherentBridgeSamples = bridgeDerivative.dot(this.previousBridgeDirection) > 0
+        ? this.coherentBridgeSamples + 1 : 0;
+      this.previousBridgeDirection.copy(bridgeDerivative);
       this.bridgeVelocity.lerp(bridgeDerivative, alpha(3));
       const speed = this.bridgeVelocity.length();
       const displacement = this.bridge!.distanceTo(pose.bridge) / Math.max(8, measuredSpan);
@@ -206,9 +228,8 @@ export class StableEyewearPose {
       // the local origin from that midpoint makes the whole frame detach and
       // jump.  During a turn, keep this calibrated offset and follow only the
       // stable nasal bridge below.
-      if (pose.isFrontal !== false) {
-        this.localAnchor.lerp(offset, alpha(0.8));
-      }
+      // The nasal seat is anatomical: keep it fixed through turns and returns.
+      // Re-learning it as the head crosses frontal caused a rocking motion.
 
       // 2. Continuous Adaptive One-Euro Scale Filter (Butter-smooth zoom in/out + rock-solid stationary lock)
       // Low-pass filtered derivative (cutoff 0.85 Hz) prevents detector frame-to-frame noise from spiking velocity
@@ -235,15 +256,16 @@ export class StableEyewearPose {
       // - Active zoom / approach response: smoothly scales cutoff up to 4.5+ Hz for fluid, instant zoom in/out
       const spanCutoff = 0.38 + (zoomSpeed * 28.0 + displacementBonus) * rotDamping;
 
-      const isExpanding = measuredSpan >= this.span;
-      const isExtremeProfile = pose.isFrontal === false && Math.abs(rotSpeed) > 0.45;
-      if (isExpanding || pose.isFrontal !== false || !isExtremeProfile) {
-        this.span += (measuredSpan - this.span) * alpha(Math.min(7.0, spanCutoff));
-      }
+      // Apply the same response to growth and shrinkage; asymmetric filtering
+      // ratchets size upward on repeated left/right movements.
+      this.span += (measuredSpan - this.span) * alpha(Math.min(7.0, spanCutoff));
 
       // Keep the translation filter independent: position noise must not open
       // the rotation filter and amplify wobble when the head is moving.
-      this.bridge!.lerp(pose.bridge, alpha(Math.min(7, posCutoff)));
+      const movementResponse = this.coherentBridgeSamples >= 2
+        ? THREE.MathUtils.smoothstep(speed, .04, .35) : 0;
+      const translationCutoff = THREE.MathUtils.lerp(posCutoff, Math.max(posCutoff, 10), movementResponse);
+      this.bridge!.lerp(pose.bridge, alpha(Math.min(20, translationCutoff)));
     }
 
     this.previousBridge.copy(pose.bridge);
@@ -256,6 +278,10 @@ export class StableEyewearPose {
     const eyeSpan = this.span;
     const bridge = this.bridge!.clone();
     const position = this.localAnchor.clone().multiplyScalar(eyeSpan).applyQuaternion(quaternion).add(bridge);
+    // Temple fitting and occlusion must use the same transform as the frame.
+    const filteredTemple = (point: THREE.Vector3) => point.clone().sub(pose.bridge)
+      .applyQuaternion(pose.quaternion.clone().invert()).multiplyScalar(eyeSpan / measuredSpan)
+      .applyQuaternion(quaternion).add(bridge);
     return {
       ...pose,
       bridge,
@@ -263,11 +289,12 @@ export class StableEyewearPose {
       position,
       quaternion,
       eyeSpan,
-      leftTemple: pose.leftTemple,
-      rightTemple: pose.rightTemple,
+      leftTemple: filteredTemple(pose.leftTemple),
+      rightTemple: filteredTemple(pose.rightTemple),
       eyeLift: this.liftRatio * eyeSpan,
       browHeight: this.browRatio === undefined ? undefined : this.browRatio * eyeSpan,
       faceWidth: (measuredFaceWidth / measuredSpan) * eyeSpan,
+      xAxis: new THREE.Vector3(1, 0, 0).applyQuaternion(quaternion),
       yAxis: new THREE.Vector3(0, 1, 0).applyQuaternion(quaternion),
       zAxis: new THREE.Vector3(0, 0, 1).applyQuaternion(quaternion),
     };

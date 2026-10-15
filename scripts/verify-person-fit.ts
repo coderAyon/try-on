@@ -94,7 +94,9 @@ for (let i=1; i<=90; i++) {
   fit.surface.forEach((p,j) => { maxSurfaceError = Math.max(maxSurfaceError, p.distanceTo(pose.surface[j])); });
   previousRawSurface = pose.surface.map(p => p.clone());
   previousFilteredSurface = fit.surface.map(p => p.clone());
-  assert(fit.leftTemple.distanceTo(pose.leftTemple) < 1e-9, 'Temple target changed from measured face');
+  const measuredTemple = pose.leftTemple.clone().sub(pose.bridge).applyQuaternion(pose.quaternion.clone().invert()).divideScalar(pose.eyeSpan);
+  const fittedTemple = fit.leftTemple.clone().sub(fit.bridge).applyQuaternion(fit.quaternion.clone().invert()).divideScalar(fit.eyeSpan);
+  assert(fittedTemple.distanceTo(measuredTemple) < 1e-9, `Filtered temple changed head-local anatomy: ${fittedTemple.distanceTo(measuredTemple)}; ${pose.eyeSpan}, ${fit.eyeSpan}`);
 }
 assert(filteredSurfaceTravel < rawSurfaceTravel * .85, 'Face occluder surface noise was not smoothed');
 assert(maxSurfaceError < .02, 'Face surface smoothing lagged behind live anatomy');
@@ -102,3 +104,21 @@ rig.dispose();
 console.log('PASS: individual brows, nasal clearance, bounded correction, rotated fit; face-mask jitter reduction',
   Math.round((1-filteredSurfaceTravel/rawSurfaceTravel)*100)+'%', 'moving pose noise reduction',
   Math.round((1-Math.sqrt(outputEnergy/inputEnergy))*100)+'%', 'max lag', maxLag*180/Math.PI);
+
+// Oblique eye-depth errors must not permanently enlarge a calibrated frame.
+for (const fps of [20, 30, 60]) {
+  const tracker = new StableEyewearPose();
+  const baseline = face().pose;
+  tracker.update(face().pose, 0);
+  for (let i = 1; i <= fps * 3; i++) {
+    const raw = face().pose;
+    raw.isFrontal = false;
+    raw.eyeSpan *= 1.2;
+    raw.surface.forEach(point => point.divideScalar(1.2));
+    const fitted = tracker.update(raw, i * 1000 / fps);
+    assert(Math.abs(fitted.eyeSpan - baseline.eyeSpan) < 1e-8, 'Profile depth noise enlarged the frame');
+  }
+  const returned = tracker.update(face().pose, (fps * 3 + 1) * 1000 / fps);
+  assert(Math.abs(returned.eyeSpan - baseline.eyeSpan) < 1e-8, 'Profile turn corrupted frontal calibration');
+}
+console.log('PASS: profile scale calibration at 20/30/60 FPS');

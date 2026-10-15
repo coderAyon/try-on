@@ -26,64 +26,40 @@ html.dark body {
   color: #f1f5f9;
 }
 
-/* =========================================================================
-   Ultra-Smooth Theme Transitions (GPU Accelerated & Synchronized)
-   ========================================================================= */
-
-/* Native View Transitions API support (Chrome 111+, Edge 111+, Safari 18+) */
-::view-transition-old(root),
-::view-transition-new(root) {
-  animation-duration: 350ms;
-  animation-timing-function: cubic-bezier(0.25, 1, 0.5, 1);
+/* Snappy, instantaneous theme transitions on root container only (prevents full-DOM reflow lag) */
+body,
+#root {
+  transition: background-color 150ms ease, color 150ms ease;
 }
 
-::view-transition-old(root) {
-  z-index: 1;
-}
-
-::view-transition-new(root) {
-  z-index: 2;
-}
-
-/* Exclude real-time video and WebGL canvases from snapshot freezing so webcam stays smooth */
-#jeelizCanvas,
-video,
-canvas {
-  view-transition-name: none !important;
-}
-
-/* Synchronized CSS theme interpolation across components */
-html.theme-transitioning,
-html.theme-transitioning *,
-html.theme-transitioning *::before,
-html.theme-transitioning *::after {
-  transition: background-color 350ms cubic-bezier(0.25, 1, 0.5, 1),
-              border-color 350ms cubic-bezier(0.25, 1, 0.5, 1),
-              color 250ms cubic-bezier(0.25, 1, 0.5, 1),
-              box-shadow 350ms cubic-bezier(0.25, 1, 0.5, 1),
-              fill 350ms cubic-bezier(0.25, 1, 0.5, 1),
-              stroke 350ms cubic-bezier(0.25, 1, 0.5, 1) !important;
-  transition-delay: 0s !important;
-}
-
-/* Custom Luxury Scrollbar */
+/* Custom Luxury Scrollbar - Transparent tracks to avoid black borders on light containers */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #0b0d11;
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #232a3b;
+  background: rgba(148, 163, 184, 0.3);
   border-radius: 9999px;
-  border: 1px solid rgba(212, 175, 55, 0.2);
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #d4af37;
+  background: #6355f6;
+}
+
+/* Hide scrollbar utility for Chrome, Safari, Edge, Firefox */
+.no-scrollbar::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+.no-scrollbar {
+  -ms-overflow-style: none !important;  /* IE and Edge */
+  scrollbar-width: none !important;  /* Firefox */
 }
 
 /* Glassmorphism Classes */
@@ -1355,11 +1331,12 @@ html.theme-transitioning *::after {
 
 .photo-asset-card h2 { font-size: 13px; font-weight: 600; color: #ffffff; }
 .photo-asset-card header > span { font-size: 9px; letter-spacing: .14em; color: #c084fc; font-weight: 700; }
-.photo-asset-preview { height: 265px; position: relative; border: 1.5px dashed rgba(216, 180, 254, 0.25); background: #130d1d; overflow: hidden; border-radius: 12px; }
-.photo-face-preview.has-photo { height: 340px; }
+.photo-asset-preview { height: 288px; position: relative; border: 1.5px dashed rgba(216, 180, 254, 0.25); background: #130d1d; overflow: hidden; border-radius: 16px; }
+.photo-face-preview.has-photo { height: 288px !important; }
 .photo-asset-preview > img { width: 100%; height: 100%; object-fit: contain; }
-.photo-filename { position: absolute; bottom: 0; left: 0; right: 0; background: rgba(19, 13, 29, 0.9); font-size: 11px; padding: 11px; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; color: #e9d5ff; }
-.photo-remove { position: absolute; right: 8px; top: 8px; width: 28px; height: 28px; display: grid; place-items: center; border: 1px solid #7c3aed; border-radius: 50%; background: #2e1065; color: white; cursor: pointer; }
+.photo-face-preview img.photo-main-img { width: 100%; height: 100%; object-fit: cover !important; object-position: top center !important; }
+.photo-filename { position: absolute; bottom: 0; left: 0; right: 0; background: rgba(19, 13, 29, 0.9); font-size: 11px; padding: 11px; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; color: #e9d5ff; z-index: 20; }
+.photo-remove { position: absolute; right: 8px; top: 8px; width: 28px; height: 28px; display: grid; place-items: center; border: 1px solid #7c3aed; border-radius: 50%; background: #2e1065; color: white; cursor: pointer; z-index: 25; }
 .photo-placeholder, .photo-result-empty { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 13px; text-align: center; color: #9d8ab8; padding: 20px; }
 .photo-placeholder { cursor: pointer; transition: all 0.2s ease; border-radius: 10px; }
 .photo-placeholder:hover { background: rgba(124, 58, 237, 0.12); color: #e9d5ff; }
@@ -1402,7 +1379,7 @@ html.theme-transitioning *::after {
 @media (max-width: 640px) {
   .photo-workspace { padding: 14px; border-radius: 16px; }
   .photo-workspace-heading h1 { font-size: 24px; }
-  .photo-face-preview.has-photo { height: min(340px, 48svh); }
+  .photo-face-preview.has-photo { height: min(288px, 48svh); }
   .photo-input-cards, .photo-setting-fields { grid-template-columns: minmax(0, 1fr); }
   .photo-result-stage { height: min(580px, 75svh); min-height: 320px; }
   .photo-result-tools { flex-wrap: wrap; }

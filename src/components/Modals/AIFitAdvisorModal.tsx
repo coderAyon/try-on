@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { X, Sparkles, ArrowRight, RefreshCw, Camera, ScanFace, Ruler } from 'lucide-react';
 import { FaceMeasurements, SunglassesProduct, TrackingStats } from '../../types';
-import { suggestFrames, FrameShape } from '../../utils/faceFitAdvisor';
+import { suggestFrames, FrameShape, FaceMeasurementScan, measurementsDiffer } from '../../utils/faceFitAdvisor';
 import { ProductThumbnail } from '../Catalog/ProductThumbnail';
 
 function ShapePreview({ shape }: { shape: FrameShape }) {
@@ -19,12 +19,12 @@ function ShapePreview({ shape }: { shape: FrameShape }) {
 interface Props { isOpen: boolean; onClose: () => void; onSelectProduct: (product: SunglassesProduct) => void; stats: TrackingStats; products: SunglassesProduct[]; cameraEnabled: boolean; onEnableCamera: () => void; activeProduct: SunglassesProduct; mirror: boolean; cameraMessage: string; cameraError: string }
 export const AIFitAdvisorModal: React.FC<Props> = ({ isOpen, onClose, onSelectProduct, stats, products, cameraEnabled, onEnableCamera, activeProduct, mirror, cameraMessage, cameraError }) => {
   const [measurement, setMeasurement] = useState<FaceMeasurements | null>(null);
-  const baseline = useRef(0);
+  const scan = useRef(new FaceMeasurementScan());
   const scanStarted = useRef(0);
   const [progress, setProgress] = useState(0);
   const before = useRef<HTMLCanvasElement>(null);
   const after = useRef<HTMLCanvasElement>(null);
-  const startScan = () => { baseline.current = stats.faceMeasurements?.samples ?? 0; scanStarted.current = Date.now(); setProgress(0); setMeasurement(null); };
+  const startScan = () => { scan.current.reset(); scanStarted.current = Date.now(); setProgress(0); setMeasurement(null); };
   const panel = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!isOpen) { setMeasurement(null); return; }
@@ -36,12 +36,19 @@ export const AIFitAdvisorModal: React.FC<Props> = ({ isOpen, onClose, onSelectPr
   }, [isOpen]);
   useEffect(() => {
     const m = stats.faceMeasurements;
-    if (!isOpen || measurement) return;
-    if (!cameraEnabled || !stats.faceDetected || !m) { baseline.current = 0; setProgress(0); return; }
-    if (m.samples < baseline.current) baseline.current = 0;
-    const samples = m.samples - baseline.current;
-    setProgress(Math.min(100, Math.round(samples / 12 * 100)));
-    if (samples >= 12 && m.measuredAt > scanStarted.current && Date.now() - m.measuredAt < 1000) setMeasurement({ ...m });
+    if (!isOpen) return;
+    if (!cameraEnabled || !stats.faceDetected) {
+      scan.current.reset(); setProgress(0); setMeasurement(null); return;
+    }
+    if (!m || Date.now() - m.measuredAt >= 1000) {
+      scan.current.reset(); setProgress(0); return;
+    }
+    if (m.measuredAt <= scanStarted.current) return;
+    if (measurement && !measurementsDiffer(measurement, m)) return;
+    if (measurement) { scan.current.reset(); setMeasurement(null); }
+    const result = scan.current.add(m);
+    setProgress(Math.min(100, Math.round(scan.current.samples / 12 * 100)));
+    if (result) setMeasurement(result);
   }, [isOpen, stats, measurement, cameraEnabled]);
   useEffect(() => {
     if (!isOpen) return;
@@ -82,7 +89,7 @@ export const AIFitAdvisorModal: React.FC<Props> = ({ isOpen, onClose, onSelectPr
       {!result ? <div className={`fit-scan ${cameraEnabled ? 'is-scanning' : ''}`} aria-live="polite">
         <div className="fit-scan-icon" aria-hidden="true">{cameraEnabled ? <ScanFace size={32} /> : <Sparkles size={32} />}</div>
         <h3>{!cameraEnabled ? 'Allow your camera to find your fit' : stats.faceDetected ? 'Measuring your face shape' : 'Let the camera see your face'}</h3>
-        <p>Keep your face centred, with your forehead and jaw visible. We measure proportions on your device and compare them with each frame shape. Your camera image stays on this device.</p>
+        <p>Face straight ahead with a relaxed, closed mouth, and keep your forehead and jaw visible. We measure proportions on your device and compare them with each frame shape. Your camera image stays on this device.</p>
         {!cameraEnabled ? <button className="frame-capture" onClick={onEnableCamera}><Camera size={16} /> Allow camera & analyze my face</button> : <>
           <canvas ref={before} className="fit-live-preview" aria-label="Live camera preview" />
           <div className="fit-scan-progress" role="status" aria-label={`Face analysis ${progress}%`}>
@@ -94,13 +101,13 @@ export const AIFitAdvisorModal: React.FC<Props> = ({ isOpen, onClose, onSelectPr
         </>}</div> : <div className="fit-results fit-results-enter">
         <div className="fit-summary">
           <div style={{ flex: 1 }}>
-            <span className="detail-label">ESTIMATED FACE SHAPE</span>
+            <span className="detail-label">ESTIMATED PROPORTION MATCH</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '4px' }}>
-              <h3 style={{ margin: 0 }}>{result.shape}</h3>
+              <h3 style={{ margin: 0 }}>{result.confidence < 40 ? 'Mixed / uncertain' : result.shape}</h3>
               <span className="fit-confidence-badge">{result.confidence}% shape similarity</span>
             </div>
-            <p style={{ marginTop: '8px' }}>{result.reason}</p>
-            <p><strong>Recommended frame shape: {result.recommendedShape ?? 'No suitable models available'}</strong>. {['Square', 'Round', 'Oval'].includes(result.shape) ? 'Showing frames ranked against your measured face proportions.' : 'Showing frames ranked against your measured face proportions.'}</p>
+            <p style={{ marginTop: '8px' }}>{result.confidence < 40 ? 'Your proportions do not closely match one shape. These frame suggestions use the nearest match; try another scan facing straight ahead.' : result.reason}</p>
+            <p><strong>Recommended frame shape: {result.recommendedShape ?? 'No suitable models available'}</strong>. {result.confidence < 40 ? `Showing options for the nearest proportion match (${result.shape.toLowerCase()}).` : `Showing frames selected for your estimated ${result.shape.toLowerCase()} proportions.`}</p>
             {result.scores && (
               <div className="fit-scores-breakdown">
                 <span className="fit-scores-title">YOUR PROPORTION MATCH · ALL FACE SHAPES</span>
@@ -128,6 +135,7 @@ export const AIFitAdvisorModal: React.FC<Props> = ({ isOpen, onClose, onSelectPr
           <span>Jaw / cheek taper <strong>{measurement!.jawToCheek.toFixed(2)}x</strong></span>
           <span>Forehead / cheek <strong>{measurement!.foreheadToCheek.toFixed(2)}x</strong></span>
           <span>Forehead / jaw ratio <strong>{(measurement!.foreheadToJaw ?? (measurement!.foreheadToCheek / (measurement!.jawToCheek || 1))).toFixed(2)}x</strong></span>
+          {measurement!.chinToJaw && <span>Chin / jaw taper <strong>{measurement!.chinToJaw.toFixed(2)}x</strong></span>}
         </div>
         <h3 className="fit-section-title">Recommended frame shape</h3>
         <div className="fit-shapes">{result.shapes.map(shape => <div key={shape}><ShapePreview shape={shape} /><span>{shape === 'Flat' ? 'Soft flat / browline' : shape}</span></div>)}</div>

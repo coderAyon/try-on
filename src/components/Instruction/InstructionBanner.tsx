@@ -15,6 +15,7 @@ interface InstructionBannerProps {
   onOpenGallery?: () => void;
   onSelectFrameClick?: () => void;
   cameraError?: string;
+  className?: string;
 }
 
 export const InstructionBanner: React.FC<InstructionBannerProps> = ({
@@ -24,6 +25,7 @@ export const InstructionBanner: React.FC<InstructionBannerProps> = ({
   onOpenGallery,
   onSelectFrameClick,
   cameraError,
+  className = '',
 }) => {
   const isCameraBlocked = Boolean(cameraError);
 
@@ -97,7 +99,7 @@ export const InstructionBanner: React.FC<InstructionBannerProps> = ({
   ];
 
   return (
-    <div className="relative overflow-hidden rounded-[22px] bg-gradient-to-r from-[#f8f7ff] via-[#f5f2ff] to-[#edf0ff] dark:from-[#0c1322] dark:via-[#0e172a] dark:to-[#0c1322] border border-[#e4dffa] dark:border-blue-900/40 px-3.5 py-2.5 sm:px-4 sm:py-3 shadow-[0_4px_20px_rgba(99,85,246,0.05)] dark:shadow-[0_8px_30px_rgba(3,7,18,0.7)] select-none transition-colors duration-300">
+    <div className={`relative overflow-hidden rounded-[22px] bg-gradient-to-r from-[#f8f7ff] via-[#f5f2ff] to-[#edf0ff] dark:from-[#0c1322] dark:via-[#0e172a] dark:to-[#0c1322] border border-[#e4dffa] dark:border-blue-900/40 px-3.5 py-2.5 sm:px-4 sm:py-2.5 shadow-[0_4px_20px_rgba(99,85,246,0.05)] dark:shadow-[0_8px_30px_rgba(3,7,18,0.7)] select-none transition-colors duration-300 flex flex-col justify-between ${className}`}>
       {/* Subtle Ambient Glowing Orbs */}
       <div className="absolute -top-12 -left-12 w-40 h-40 rounded-full bg-[#8fa4ff]/20 dark:bg-blue-600/15 blur-2xl pointer-events-none" />
       <div className="absolute -bottom-12 right-1/4 w-40 h-40 rounded-full bg-[#d8b4fe]/25 dark:bg-cyan-500/15 blur-2xl pointer-events-none" />
@@ -123,7 +125,7 @@ export const InstructionBanner: React.FC<InstructionBannerProps> = ({
       </div>
 
       {/* 4 Frosted Interactive Step Cards spanning the full banner */}
-      <div className="relative grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 items-stretch">
+      <div className="relative grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 items-stretch flex-1">
         {steps.map((item) => {
           const Icon = item.icon;
 

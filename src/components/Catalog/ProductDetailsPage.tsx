@@ -10,7 +10,7 @@ export function ProductDetailsPage({ product, variantIndex, onVariantChange, onB
   const [loading, setLoading] = useState(true);
   useEffect(() => { heading.current?.focus(); }, [product.id]);
   return <article className="product-page" key={product.id}>
-    <button className="product-back" onClick={onBack}><ArrowLeft size={17} /> Back to fitting room</button>
+    <button className="product-back" onClick={onBack}><ArrowLeft size={17} /> Back to all frames</button>
     <div className="product-page-heading"><span className="section-eyebrow">{product.brand === 'Model Library' ? 'STUDIO COLLECTION' : product.brand}</span><h1 ref={heading} tabIndex={-1}>{product.name}</h1><p>A closer look at your next favourite.</p></div>
     <div className="product-page-grid">
       <section className="product-studio" aria-label={`${product.name} interactive 3D studio`}>

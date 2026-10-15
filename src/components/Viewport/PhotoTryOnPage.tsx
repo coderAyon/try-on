@@ -64,11 +64,13 @@ function trimTransparentFrame(image: HTMLImageElement | HTMLCanvasElement): HTML
   const width = image instanceof HTMLImageElement ? image.naturalWidth : image.width;
   const height = image instanceof HTMLImageElement ? image.naturalHeight : image.height;
   const canvas = document.createElement('canvas');
-  canvas.width = width; canvas.height = height;
+  canvas.width = Math.max(1, width);
+  canvas.height = Math.max(1, height);
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) throw Error('Could not read the isolated sunglasses image.');
   ctx.drawImage(image, 0, 0);
-  const { data } = ctx.getImageData(0, 0, width, height);
+  const imgData = ctx.getImageData(0, 0, width, height);
+  const { data } = imgData;
   let minX = width, minY = height, maxX = -1, maxY = -1;
   let transparentPixels = 0;
   for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
@@ -76,14 +78,107 @@ function trimTransparentFrame(image: HTMLImageElement | HTMLCanvasElement): HTML
     if (alpha < 245) transparentPixels++;
     if (alpha > 20) { minX = Math.min(minX, x); minY = Math.min(minY, y); maxX = Math.max(maxX, x); maxY = Math.max(maxY, y); }
   }
-  if (maxX < minX || maxY < minY || transparentPixels === 0) {
-    throw Error('Background removal did not return a transparent cutout. Retry with a clearer sunglasses photo.');
+
+  // If the image does not have transparent cutouts yet, isolate it client-side
+  if (maxX < minX || maxY < minY || transparentPixels < (width * height * 0.03)) {
+    const seedOffsets = [
+      0,
+      Math.min(width - 1, 6) * 4,
+      (width - 1) * 4,
+      ((height - 1) * width) * 4,
+      ((height - 1) * width + width - 1) * 4,
+      (Math.floor(height / 2) * width) * 4,
+      (Math.floor(height / 2) * width + width - 1) * 4,
+      Math.floor(width / 2) * 4,
+      ((height - 1) * width + Math.floor(width / 2)) * 4
+    ];
+
+    const bgSeeds = seedOffsets.map(off => ({
+      r: data[off],
+      g: data[off + 1],
+      b: data[off + 2]
+    }));
+
+    const isBg = (idx: number) => {
+      const pr = data[idx];
+      const pg = data[idx + 1];
+      const pb = data[idx + 2];
+      for (const s of bgSeeds) {
+        const dSq = (pr - s.r) ** 2 + (pg - s.g) ** 2 + (pb - s.b) ** 2;
+        if (dSq < 3000) return true; // ~55 color distance
+      }
+      return false;
+    };
+
+    const visited = new Uint8Array(width * height);
+    const queue = new Int32Array(width * height);
+    let qHead = 0, qTail = 0;
+
+    for (let x = 0; x < width; x++) {
+      if (isBg(x * 4)) { visited[x] = 1; queue[qTail++] = x; }
+      const bot = (height - 1) * width + x;
+      if (isBg(bot * 4)) { visited[bot] = 1; queue[qTail++] = bot; }
+    }
+    for (let y = 0; y < height; y++) {
+      const left = y * width;
+      if (!visited[left] && isBg(left * 4)) { visited[left] = 1; queue[qTail++] = left; }
+      const right = y * width + width - 1;
+      if (!visited[right] && isBg(right * 4)) { visited[right] = 1; queue[qTail++] = right; }
+    }
+
+    while (qHead < qTail) {
+      const pos = queue[qHead++];
+      const px = pos % width;
+      const py = (pos / width) | 0;
+
+      if (px > 0) {
+        const n = pos - 1;
+        if (!visited[n] && isBg(n * 4)) { visited[n] = 1; queue[qTail++] = n; }
+      }
+      if (px < width - 1) {
+        const n = pos + 1;
+        if (!visited[n] && isBg(n * 4)) { visited[n] = 1; queue[qTail++] = n; }
+      }
+      if (py > 0) {
+        const n = pos - width;
+        if (!visited[n] && isBg(n * 4)) { visited[n] = 1; queue[qTail++] = n; }
+      }
+      if (py < height - 1) {
+        const n = pos + width;
+        if (!visited[n] && isBg(n * 4)) { visited[n] = 1; queue[qTail++] = n; }
+      }
+    }
+
+    minX = width; minY = height; maxX = -1; maxY = -1;
+    for (let i = 0; i < visited.length; i++) {
+      if (visited[i]) {
+        data[i * 4 + 3] = 0;
+      } else if (data[i * 4 + 3] > 20) {
+        const x = i % width;
+        const y = (i / width) | 0;
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x);
+        maxY = Math.max(maxY, y);
+      }
+    }
+    ctx.putImageData(imgData, 0, 0);
   }
-  const padding = Math.max(4, Math.round(Math.max(maxX - minX + 1, maxY - minY + 1) * 0.025));
+
+  // Safe fallback bounds if segmentation was too strict
+  if (maxX <= minX || maxY <= minY) {
+    minX = Math.max(0, Math.floor(width * 0.05));
+    maxX = Math.min(width - 1, Math.ceil(width * 0.95));
+    minY = Math.max(0, Math.floor(height * 0.15));
+    maxY = Math.min(height - 1, Math.ceil(height * 0.85));
+  }
+
+  const padding = Math.max(2, Math.round(Math.max(maxX - minX + 1, maxY - minY + 1) * 0.02));
   const left = Math.max(0, minX - padding), top = Math.max(0, minY - padding);
   const right = Math.min(width, maxX + padding + 1), bottom = Math.min(height, maxY + padding + 1);
   const cropped = document.createElement('canvas');
-  cropped.width = right - left; cropped.height = bottom - top;
+  cropped.width = Math.max(16, right - left);
+  cropped.height = Math.max(16, bottom - top);
   cropped.getContext('2d')!.drawImage(canvas, left, top, cropped.width, cropped.height, 0, 0, cropped.width, cropped.height);
   return cropped;
 }
@@ -98,6 +193,7 @@ interface EyewearGeometry {
   bridgeTopY: number;
   frontWidth: number;
   lensSpan: number;
+  lensHeight: number;
   roll: number;
 }
 
@@ -106,9 +202,51 @@ function analyzeEyewearGeometry(canvas: HTMLCanvasElement): EyewearGeometry {
   if (!ctx) throw Error('Could not analyze sunglasses image.');
   const width = canvas.width;
   const height = canvas.height;
-  const { data } = ctx.getImageData(0, 0, width, height);
+  const imgData = ctx.getImageData(0, 0, width, height);
+  const { data } = imgData;
 
-  // Column vertical spans and area counts
+  // 1. Analyze row density to distinguish the dense front frame from thin upward temple arms
+  const rowDensity = new Int32Array(height);
+  let maxRowDensity = 0;
+  for (let y = 0; y < height; y++) {
+    let count = 0;
+    for (let x = 0; x < width; x++) {
+      if (data[(y * width + x) * 4 + 3] > 20) count++;
+    }
+    rowDensity[y] = count;
+    if (count > maxRowDensity) maxRowDensity = count;
+  }
+
+  // Front frame band: both lenses and bridge form a wide, dense structure (>28% of maxRowDensity)
+  const frontThreshold = Math.max(12, maxRowDensity * 0.28);
+  let frontTopY = 0;
+  for (let y = 0; y < height; y++) {
+    if (rowDensity[y] >= frontThreshold) {
+      frontTopY = Math.max(0, y - 2);
+      break;
+    }
+  }
+
+  let frontBotY = height - 1;
+  for (let y = height - 1; y >= 0; y--) {
+    if (rowDensity[y] >= frontThreshold) {
+      frontBotY = Math.min(height - 1, y + 2);
+      break;
+    }
+  }
+
+  // If thin temple arms arch upward above the front frame (common in table/desk product photos),
+  // mask them out so they do not float awkwardly on the user's forehead/eyebrows in front-facing try-on.
+  if (frontTopY > 4) {
+    for (let y = 0; y < frontTopY; y++) {
+      for (let x = 0; x < width; x++) {
+        data[(y * width + x) * 4 + 3] = 0;
+      }
+    }
+    ctx.putImageData(imgData, 0, 0);
+  }
+
+  // 2. Measure vertical column density and centers within the front frame band
   const density = new Float32Array(width);
   const colTopY = new Int32Array(width).fill(-1);
   const colBotY = new Int32Array(width).fill(-1);
@@ -117,7 +255,7 @@ function analyzeEyewearGeometry(canvas: HTMLCanvasElement): EyewearGeometry {
 
   for (let x = 0; x < width; x++) {
     let topY = -1, botY = -1, count = 0;
-    for (let y = 0; y < height; y++) {
+    for (let y = frontTopY; y <= frontBotY; y++) {
       if (data[(y * width + x) * 4 + 3] > 20) {
         if (topY < 0) topY = y;
         botY = y;
@@ -146,32 +284,33 @@ function analyzeEyewearGeometry(canvas: HTMLCanvasElement): EyewearGeometry {
     smoothed[x] = sum / count;
   }
 
-  // The uploaded product image has already been isolated and levelled.
-  // Use the actual visible-frame bounds: gaps between lenses and the bridge
-  // must never be mistaken for the outer edge of the frame.
-  let frontMinX = width, frontMaxX = 0, frameTop = height, frameBottom = 0;
+  let frontMinX = width, frontMaxX = 0;
   for (let x = 0; x < width; x++) {
-    if (density[x] > 0) { frontMinX = Math.min(frontMinX, x); frontMaxX = Math.max(frontMaxX, x); }
+    if (density[x] > 4) {
+      frontMinX = Math.min(frontMinX, x);
+      frontMaxX = Math.max(frontMaxX, x);
+    }
   }
-  for (let y = 0; y < height; y++) for (let x = frontMinX; x <= frontMaxX; x++) {
-    if (data[(y * width + x) * 4 + 3] > 20) { frameTop = Math.min(frameTop, y); frameBottom = Math.max(frameBottom, y); }
+  if (frontMaxX <= frontMinX) {
+    frontMinX = 0;
+    frontMaxX = width - 1;
   }
-  if (frontMaxX <= frontMinX || frameBottom <= frameTop) throw Error('Could not find the full sunglasses frame.');
 
   const midX = (frontMinX + frontMaxX) * 0.5;
+  const innerMargin = Math.round((frontMaxX - frontMinX) * 0.06);
 
-  // Left lens peak (tallest dense column in left half of front frame)
-  let peakLeftX = frontMinX, maxLeft = 0;
-  for (let x = frontMinX; x < midX; x++) {
+  // Left lens peak (tallest dense column in left half)
+  let peakLeftX = Math.round(frontMinX + (midX - frontMinX) * 0.5), maxLeft = 0;
+  for (let x = frontMinX + innerMargin; x < midX - 8; x++) {
     if (smoothed[x] > maxLeft) {
       maxLeft = smoothed[x];
       peakLeftX = x;
     }
   }
 
-  // Right lens peak (tallest dense column in right half of front frame)
-  let peakRightX = Math.round(midX), maxRight = 0;
-  for (let x = Math.round(midX); x <= frontMaxX; x++) {
+  // Right lens peak (tallest dense column in right half)
+  let peakRightX = Math.round(midX + (frontMaxX - midX) * 0.5), maxRight = 0;
+  for (let x = Math.round(midX + 8); x <= frontMaxX - innerMargin; x++) {
     if (smoothed[x] > maxRight) {
       maxRight = smoothed[x];
       peakRightX = x;
@@ -179,7 +318,7 @@ function analyzeEyewearGeometry(canvas: HTMLCanvasElement): EyewearGeometry {
   }
 
   // Minimum valley bridge between peaks
-  let minValley = 999, bridgeX = Math.round((peakLeftX + peakRightX) * 0.5);
+  let minValley = 9999, bridgeX = Math.round((peakLeftX + peakRightX) * 0.5);
   for (let x = peakLeftX; x <= peakRightX; x++) {
     if (smoothed[x] < minValley) {
       minValley = smoothed[x];
@@ -189,42 +328,31 @@ function analyzeEyewearGeometry(canvas: HTMLCanvasElement): EyewearGeometry {
 
   const lensSpan = Math.max(20, peakRightX - peakLeftX);
   const frontWidth = frontMaxX - frontMinX + 1;
-
-  // Measure dense lens height around the lens peaks
-  let lensTopY = height, lensBottomY = 0;
-  const sampleCols = [peakLeftX, peakRightX, Math.round((peakLeftX + bridgeX) * 0.5), Math.round((peakRightX + bridgeX) * 0.5)];
-  for (const x of sampleCols) {
-    if (x >= 0 && x < width && colTopY[x] >= 0) {
-      lensTopY = Math.min(lensTopY, colTopY[x]);
-      lensBottomY = Math.max(lensBottomY, colBotY[x]);
-    }
-  }
-  const lensHeight = Math.max(16, lensBottomY - lensTopY + 1);
-
-  // ANSI Z80 standard: pupil line is ~38% down the lens aperture
-  const opticalPupilY = lensTopY + lensHeight * 0.38;
+  const lensHeight = Math.max(16, frontBotY - frontTopY + 1);
+  // Optical pupil line: eye pupils sit in the upper-middle portion of the front frame,
+  // approximately ~62% down from the bottom of the front frame (or ~38% down from top rim).
+  // Placing opticalPupilY at frontTopY + lensHeight * 0.62 lifts the top rim naturally to the eyebrow line.
+  const opticalPupilY = frontTopY + lensHeight * 0.62;
   const bridgeY = (colCenterY[peakLeftX] + colCenterY[peakRightX]) * 0.5;
-  const measuredRoll = Math.atan2(colCenterY[peakRightX] - colCenterY[peakLeftX], lensSpan);
-  const roll = measuredRoll;
+  const roll = Math.atan2(colCenterY[peakRightX] - colCenterY[peakLeftX], lensSpan);
 
   return {
     fullBounds: { left: 0, top: 0, right: width - 1, bottom: height - 1, width, height },
-    lensBounds: { left: frontMinX, top: lensTopY, right: frontMaxX, bottom: lensBottomY, width: frontWidth, height: lensHeight },
+    lensBounds: { left: frontMinX, top: frontTopY, right: frontMaxX, bottom: frontBotY, width: frontWidth, height: lensHeight },
     peakLeft: { x: peakLeftX, y: colCenterY[peakLeftX] },
     peakRight: { x: peakRightX, y: colCenterY[peakRightX] },
     bridge: { x: bridgeX, y: bridgeY },
     opticalPupilY,
-    bridgeTopY: lensTopY,
+    bridgeTopY: frontTopY,
     frontWidth,
     lensSpan,
+    lensHeight,
     roll,
   };
 }
 
 function straightenCustomEyewear(canvas: HTMLCanvasElement): HTMLCanvasElement {
   // Find the main axis of the visible frame before measuring the two lenses.
-  // Measuring vertical columns on a diagonal frame confuses lens height with
-  // the distance between lenses and incorrectly shrinks the whole frame.
   const pixels = canvas.getContext('2d', { willReadFrequently: true })!.getImageData(0, 0, canvas.width, canvas.height).data;
   let n = 0, sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0;
   for (let y = 0; y < canvas.height; y += 2) for (let x = 0; x < canvas.width; x += 2) {
@@ -233,7 +361,7 @@ function straightenCustomEyewear(canvas: HTMLCanvasElement): HTMLCanvasElement {
     n += weight; sx += x * weight; sy += y * weight;
     sxx += x * x * weight; syy += y * y * weight; sxy += x * y * weight;
   }
-  if (!n) throw Error('No visible sunglasses found in this image.');
+  if (!n) return canvas;
   const cx = sx / n, cy = sy / n;
   const angle = 0.5 * Math.atan2(2 * (sxy / n - cx * cy), (sxx / n - cx * cx) - (syy / n - cy * cy));
   if (Math.abs(angle) < 0.015) return canvas;
@@ -260,7 +388,7 @@ async function processCustomFrameWithHostedAI(
     return straightenCustomEyewear(trimTransparentFrame(source));
   }
 
-  onProgress('Preparing sunglasses for free Hugging Face ZeroGPU…');
+  onProgress('Preparing sunglasses for AI processing…');
   const input = await new Promise<Blob>((resolve, reject) => {
     source.toBlob(blob => blob ? resolve(blob) : reject(Error('Could not prepare the sunglasses image.')), 'image/png');
   });
@@ -271,26 +399,28 @@ async function processCustomFrameWithHostedAI(
       reader.onerror = () => reject(Error('Could not read the sunglasses image.'));
       reader.readAsDataURL(input);
     });
-    onProgress('Removing background with Bria ZeroGPU…');
+    onProgress('Removing background with Hugging Face ZeroGPU AI (Bria RMBG 2.0)…');
     const response = await fetch('/api/photo/normalize-frame', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ image: dataUrl, useAI: true }),
-      signal: AbortSignal.timeout(150_000),
+      signal: AbortSignal.timeout(35_000),
     });
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw Error(payload.error || 'Hugging Face could not process this sunglasses image.');
-    if (typeof payload.image !== 'string' || !payload.image.startsWith('data:image/png;base64,')) {
-      throw Error('Hugging Face returned an invalid transparent image. Try again with a clearer product photo.');
+    if (response.ok && typeof payload.image === 'string' && payload.image.startsWith('data:image/png;base64,')) {
+      const isolated = new Image();
+      isolated.src = payload.image;
+      await isolated.decode();
+      onProgress('Finishing transparent frame cutout…');
+      return straightenCustomEyewear(trimTransparentFrame(isolated));
     }
-    const isolated = new Image();
-    isolated.src = payload.image;
-    await isolated.decode();
-    onProgress('Finishing the transparent frame cutout…');
-    return straightenCustomEyewear(trimTransparentFrame(isolated));
+    console.warn('Backend normalize-frame did not return isolated image, using local processor:', payload);
+    onProgress('Finishing with local smart segmentation…');
+    return straightenCustomEyewear(trimTransparentFrame(source));
   } catch (error) {
-    const reason = error instanceof Error ? error.message : 'Unknown model error';
-    throw Error(`Bria ZeroGPU could not isolate this frame (${reason}). Retry with a clear, closer sunglasses photo.`);
+    console.warn('Server AI normalization failed or timed out, falling back to local segmentation:', error);
+    onProgress('Finishing with local smart segmentation…');
+    return straightenCustomEyewear(trimTransparentFrame(source));
   }
 }
 
@@ -336,17 +466,158 @@ interface FitAdjustments {
   rotate?: number;
 }
 
+let sharedCustomRenderer: THREE.WebGLRenderer | null = null;
+function getSharedCustomRenderer(width: number, height: number): THREE.WebGLRenderer {
+  if (!sharedCustomRenderer) {
+    const canvas = document.createElement('canvas');
+    sharedCustomRenderer = new THREE.WebGLRenderer({
+      canvas,
+      antialias: true,
+      alpha: true,
+      preserveDrawingBuffer: true,
+      powerPreference: 'high-performance',
+    });
+    sharedCustomRenderer.outputColorSpace = THREE.SRGBColorSpace;
+  }
+  sharedCustomRenderer.setSize(width, height, false);
+  sharedCustomRenderer.setClearColor(0x000000, 0);
+  return sharedCustomRenderer;
+}
+
+function createCustomEyewearGeometry(
+  frameCanvas: HTMLCanvasElement,
+  geom: ReturnType<typeof analyzeEyewearGeometry>,
+  scale: number,
+  wrapCurvature = true
+): THREE.BufferGeometry {
+  const segmentsX = 36;
+  const segmentsY = 2;
+  const width = frameCanvas.width * scale;
+  const sourceCenterX = (geom.peakLeft.x + geom.peakRight.x) * 0.5;
+
+  const positions: number[] = [];
+  const uvs: number[] = [];
+  const indices: number[] = [];
+
+  // 6-base optical wrap curvature: outer rims bend backwards naturally towards the ears
+  const wrapRadius = width * 1.55;
+
+  for (let iy = 0; iy <= segmentsY; iy++) {
+    const v = iy / segmentsY;
+    const py = v * frameCanvas.height;
+    const y = (geom.opticalPupilY - py) * scale;
+
+    for (let ix = 0; ix <= segmentsX; ix++) {
+      const u = ix / segmentsX;
+      const px = u * frameCanvas.width;
+      const x = (px - sourceCenterX) * scale;
+
+      const z = wrapCurvature ? -Math.pow(x, 2) / (2 * wrapRadius) : 0;
+
+      positions.push(x, y, z);
+      uvs.push(u, 1 - v);
+    }
+  }
+
+  for (let iy = 0; iy < segmentsY; iy++) {
+    for (let ix = 0; ix < segmentsX; ix++) {
+      const a = iy * (segmentsX + 1) + ix;
+      const b = (iy + 1) * (segmentsX + 1) + ix;
+      const c = (iy + 1) * (segmentsX + 1) + (ix + 1);
+      const d = iy * (segmentsX + 1) + (ix + 1);
+
+      indices.push(a, b, d);
+      indices.push(b, c, d);
+    }
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+function applyOpticalGlassEnhancement(
+  sourceCanvas: HTMLCanvasElement,
+  geom: ReturnType<typeof analyzeEyewearGeometry>
+): HTMLCanvasElement {
+  const canvas = document.createElement('canvas');
+  canvas.width = sourceCanvas.width;
+  canvas.height = sourceCanvas.height;
+  const ctx = canvas.getContext('2d')!;
+  ctx.drawImage(sourceCanvas, 0, 0);
+
+  const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const { data } = imgData;
+
+  const rx = geom.lensSpan * 0.36;
+  const ry = (geom.lensHeight || geom.lensBounds.height) * 0.38;
+
+  // Soften the interior of the lenses so wearer's real eyes show through the glass
+  for (const center of [geom.peakLeft, geom.peakRight]) {
+    const minPx = Math.max(0, Math.floor(center.x - rx));
+    const maxPx = Math.min(canvas.width - 1, Math.ceil(center.x + rx));
+    const minPy = Math.max(0, Math.floor(center.y - ry));
+    const maxPy = Math.min(canvas.height - 1, Math.ceil(center.y + ry));
+
+    for (let py = minPy; py <= maxPy; py++) {
+      for (let px = minPx; px <= maxPx; px++) {
+        const dx = (px - center.x) / rx;
+        const dy = (py - center.y) / ry;
+        const distSq = dx * dx + dy * dy;
+
+        // Inside the optical lens zone (exclude outer 22% to preserve solid rim)
+        if (distSq < 0.78) {
+          const idx = (py * canvas.width + px) * 4;
+          const currentA = data[idx + 3];
+          if (currentA > 50) {
+            const falloff = Math.max(0, 1 - distSq / 0.78);
+            const targetA = Math.round(currentA * (0.76 + 0.16 * (1 - falloff)));
+            data[idx + 3] = Math.min(currentA, targetA);
+          }
+        }
+      }
+    }
+  }
+
+  ctx.putImageData(imgData, 0, 0);
+
+  // Add realistic curved glass specular reflection arc across the upper lens diagonal
+  ctx.save();
+  for (const center of [geom.peakLeft, geom.peakRight]) {
+    const grad = ctx.createLinearGradient(
+      center.x - rx * 0.6, center.y - ry * 0.8,
+      center.x + rx * 0.4, center.y + ry * 0.4
+    );
+    grad.addColorStop(0, 'rgba(255, 255, 255, 0.22)');
+    grad.addColorStop(0.35, 'rgba(255, 255, 255, 0.08)');
+    grad.addColorStop(0.65, 'rgba(255, 255, 255, 0.0)');
+    grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.ellipse(center.x - rx * 0.15, center.y - ry * 0.20, rx * 0.65, ry * 0.60, -Math.PI / 6, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+
+  return canvas;
+}
+
 function compositeCustomFrame(
   input: HTMLCanvasElement,
   frame: HTMLImageElement,
-  points: { x: number; y: number }[],
+  points: { x: number; y: number; z?: number }[],
   width: number,
   height: number,
   adjustments?: FitAdjustments
 ) {
   // Always clean background, cavities, and reflections from the frame
-  const frameCanvas = straightenCustomEyewear(trimTransparentFrame(frame));
-  const geom = analyzeEyewearGeometry(frameCanvas);
+  const rawFrame = straightenCustomEyewear(trimTransparentFrame(frame));
+  const geom = analyzeEyewearGeometry(rawFrame);
+  const frameCanvas = applyOpticalGlassEnhancement(rawFrame, geom);
 
   // Prefer actual iris centers (MediaPipe's refined 478-point face mesh).
   // Fall back to eye-contour centers for models returning only 468 points.
@@ -374,24 +645,6 @@ function compositeCustomFrame(
   // Temporal face width (landmarks 234 to 454)
   const faceWidth = Math.hypot((points[454].x - points[234].x) * width, (points[454].y - points[234].y) * height);
 
-  // Face roll
-  const faceRoll = Math.atan2(pupilLeft.y - pupilRight.y, pupilLeft.x - pupilRight.x);
-
-  // Estimate how much of each side of the face is visible. The eye points
-  // already encode the projected eye span, so applying another cosine to the
-  // whole frame makes glasses too narrow. Use the side ratios to foreshorten
-  // each lens independently instead.
-  const eyeAxisX = (pupilLeft.x - pupilRight.x) / eyeSpan;
-  const eyeAxisY = (pupilLeft.y - pupilRight.y) / eyeSpan;
-  const dRight = Math.abs((noseRadix.x - pupilRight.x) * eyeAxisX + (noseRadix.y - pupilRight.y) * eyeAxisY);
-  const dLeft = Math.abs((pupilLeft.x - noseRadix.x) * eyeAxisX + (pupilLeft.y - noseRadix.y) * eyeAxisY);
-  const yawRatio = (dRight + dLeft) > 0 ? (dRight - dLeft) / (dRight + dLeft) : 0;
-  const yawAngle = Math.asin(Math.max(-0.5, Math.min(0.5, yawRatio * 1.5)));
-  if (Math.abs(yawAngle) > 0.72) throw Error('This photo is too close to a side profile for a reliable two-eye fit. Try a front or three-quarter view.');
-  const depthMean = Math.max(1e-4, (dRight + dLeft) * 0.5);
-  const leftPerspective = Math.max(0.65, Math.min(1.25, dRight / depthMean));
-  const rightPerspective = Math.max(0.65, Math.min(1.25, dLeft / depthMean));
-
   // User adjustments
   const userScale = adjustments?.scale ?? 1;
   const userOffsetX = adjustments?.offsetX ?? 0;
@@ -399,30 +652,24 @@ function compositeCustomFrame(
   const userRotate = ((adjustments?.rotate ?? 0) * Math.PI) / 180;
 
   // 2. Optical scale calculation:
-  // Sunglasses frame front spans across the temporal face (typical ratio 2.10x IPD or 0.98x faceWidth)
-  const targetFrontWidth = Math.max(eyeSpan * 2.10, faceWidth * 0.98);
+  // Sunglasses frame front spans across the temporal face (typical ratio ~2.40x IPD or ~1.04x faceWidth)
+  const targetFrontWidth = Math.max(faceWidth * 1.04, eyeSpan * 2.42);
   const targetLensSpan = eyeSpan * 1.08;
   const scaleFromFront = targetFrontWidth / Math.max(20, geom.frontWidth);
   const scaleFromSpan = targetLensSpan / Math.max(16, geom.lensSpan);
-  let baseScale = geom.frontWidth > 0 ? (scaleFromFront * 0.55 + scaleFromSpan * 0.45) : scaleFromSpan;
-
-  // Protective anatomical clamp: sunglass lens height must not exceed 80% of interpupillary distance
-  const maxAllowedLensH = eyeSpan * 1.05;
-  if (geom.lensBounds.height * baseScale > maxAllowedLensH) {
-    baseScale = maxAllowedLensH / geom.lensBounds.height;
-  }
+  const baseScale = geom.lensSpan > 20 ? (scaleFromFront * 0.65 + scaleFromSpan * 0.35) : scaleFromFront;
   const scale = baseScale * userScale;
 
-  // 3. Anatomical Anchor:
-  // Horizontally: centered on nasal midline between eyes
-  const anchorX = pupilCenter.x * 0.82 + noseRadix.x * 0.18 + userOffsetX;
-  // The frame's optical line is aligned to the iris center; the nose root is
-  // only a small stabilizing reference so it cannot pull the frame upward.
-  const anchorY = pupilCenter.y * 0.96 + noseRadix.y * 0.04 + userOffsetY;
+  const sourceCenterX = (geom.peakLeft.x + geom.peakRight.x) * 0.5;
 
-  const totalRotation = faceRoll - geom.roll + userRotate;
+  // 3. True 3D Pose Fitting using Three.js & MediaPipe 3D Landmark Mesh
+  const safeLandmarks = points.map(p => ({
+    x: p.x,
+    y: p.y,
+    z: typeof p.z === 'number' && Number.isFinite(p.z) ? p.z : 0,
+  }));
 
-  // 5. Composite onto output canvas
+  let rendered3D = false;
   const composite = document.createElement('canvas');
   composite.width = width;
   composite.height = height;
@@ -431,32 +678,144 @@ function compositeCustomFrame(
   ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(input, 0, 0);
 
-  // Draw each side around its own eye-to-nose depth ratio. This keeps the
-  // near lens full size while naturally narrowing the far lens on turned faces.
-  const sourceCenterX = (geom.peakLeft.x + geom.peakRight.x) * 0.5;
+  try {
+    const pose = eyewearPose(safeLandmarks, width, height);
+    if (pose) {
+      const renderer = getSharedCustomRenderer(width, height);
+      const scene = new THREE.Scene();
+      const camera = new THREE.OrthographicCamera(-width / 2, width / 2, height / 2, -height / 2, 0.1, 4500);
+      camera.position.z = 1000;
+      camera.lookAt(0, 0, 0);
+
+      // 3D Cranium / Head occluder: hides far frame/temple arm on turned poses
+      const skullPose = faceSkullPose(pose);
+      const skullGeometry = new THREE.SphereGeometry(1, 24, 18);
+      const depthMaterial = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: true });
+      const skull = new THREE.Mesh(skullGeometry, depthMaterial);
+      skull.position.copy(skullPose.position);
+      skull.quaternion.copy(skullPose.quaternion);
+      skull.scale.copy(skullPose.scale);
+      skull.renderOrder = -10;
+      scene.add(skull);
+
+      // Soft ambient contact shadow on the nose bridge & radix
+      const shadowTexture = createContactShadowTexture();
+      const shadowGeo = new THREE.PlaneGeometry(pose.eyeSpan * 0.48, pose.eyeSpan * 0.26);
+      const shadowMat = new THREE.MeshBasicMaterial({
+        map: shadowTexture,
+        transparent: true,
+        opacity: 0.32,
+        depthWrite: false,
+      });
+      const shadowMesh = new THREE.Mesh(shadowGeo, shadowMat);
+      shadowMesh.position.copy(pose.bridge);
+      shadowMesh.position.addScaledVector(pose.yAxis, -pose.eyeSpan * 0.035);
+      shadowMesh.position.addScaledVector(pose.zAxis, -pose.eyeSpan * 0.015);
+      shadowMesh.quaternion.copy(pose.quaternion);
+      shadowMesh.renderOrder = -5;
+      scene.add(shadowMesh);
+
+      // 3D Curved Eyewear Mesh with realistic face wrap curvature
+      const geometry = createCustomEyewearGeometry(frameCanvas, geom, scale, true);
+      const texture = new THREE.CanvasTexture(frameCanvas);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.minFilter = THREE.LinearFilter;
+      texture.magFilter = THREE.LinearFilter;
+      texture.generateMipmaps = false;
+
+      const material = new THREE.MeshBasicMaterial({
+        map: texture,
+        transparent: true,
+        side: THREE.DoubleSide,
+        alphaTest: 0.01,
+        depthWrite: true,
+      });
+      const mesh = new THREE.Mesh(geometry, material);
+
+      // Pre-level inherent product tilt plus user rotation
+      const localRoll = -geom.roll + userRotate;
+      if (Math.abs(localRoll) > 0.0001) {
+        mesh.rotateZ(localRoll);
+      }
+
+      const root = new THREE.Group();
+      root.add(mesh);
+
+      // Anatomical anchor: rests firmly on nasal saddle (landmark 168) on the midline
+      const bridgeOnMidline = pose.bridge.clone();
+      const pupilDiff = pose.position.clone().sub(bridgeOnMidline).dot(pose.yAxis);
+      // Aligns optical center with pupils, resting bridge on nose saddle
+      const anchor = bridgeOnMidline.clone().addScaledVector(pose.yAxis, pupilDiff * 0.60);
+      // Rest slightly forward along face normal
+      anchor.addScaledVector(pose.zAxis, pose.eyeSpan * 0.035);
+
+      // User live adjustments along head-local axes
+      anchor.addScaledVector(pose.xAxis, userOffsetX);
+      anchor.addScaledVector(pose.yAxis, -userOffsetY);
+
+      root.position.copy(anchor);
+      root.quaternion.copy(pose.quaternion);
+      scene.add(root);
+
+      renderer.render(scene, camera);
+      ctx.drawImage(renderer.domElement, 0, 0);
+
+      // Dispose per-frame Three.js geometry/materials
+      geometry.dispose();
+      material.dispose();
+      texture.dispose();
+      shadowGeo.dispose();
+      shadowMat.dispose();
+      shadowTexture.dispose();
+      skullGeometry.dispose();
+      depthMaterial.dispose();
+
+      rendered3D = true;
+    }
+  } catch (threeErr) {
+    console.warn('3D custom frame fitting fallback to 2D projection:', threeErr);
+  }
+
+  if (rendered3D) {
+    return composite;
+  }
+
+  // 4. Fallback: 3D-Aware 2D Perspective Projection
+  const eyeAxisX = (pupilLeft.x - pupilRight.x) / eyeSpan;
+  const eyeAxisY = (pupilLeft.y - pupilRight.y) / eyeSpan;
+  const dRight = Math.abs((noseRadix.x - pupilRight.x) * eyeAxisX + (noseRadix.y - pupilRight.y) * eyeAxisY);
+  const dLeft = Math.abs((pupilLeft.x - noseRadix.x) * eyeAxisX + (pupilLeft.y - noseRadix.y) * eyeAxisY);
+  const yawRatio = (dRight + dLeft) > 0 ? (dRight - dLeft) / (dRight + dLeft) : 0;
+  const yawAngle = Math.asin(Math.max(-0.6, Math.min(0.6, yawRatio * 1.5)));
+
+  const faceRoll = Math.atan2(pupilLeft.y - pupilRight.y, pupilLeft.x - pupilRight.x);
+  const totalRotation = faceRoll - geom.roll + userRotate;
+
+  const scaleX = scale * Math.max(0.40, Math.cos(yawAngle));
+  const scaleY = scale;
+  const shearY = Math.sin(yawAngle) * 0.16;
+
+  // 3D nasal midline lock
+  const anchorX = (noseRadix.x * 0.85 + pupilCenter.x * 0.15) + userOffsetX;
+  const anchorY = pupilCenter.y * 0.90 + noseRadix.y * 0.10 + userOffsetY;
+
   const cosine = Math.cos(totalRotation), sine = Math.sin(totalRotation);
-  const drawHalf = (left: boolean, perspective: number) => {
-    ctx.save();
-    const xScale = scale * perspective;
-    const a = xScale * cosine, b = xScale * sine;
-    const c = -scale * sine, d = scale * cosine;
-    const e = anchorX - a * sourceCenterX - c * geom.opticalPupilY;
-    const f = anchorY - b * sourceCenterX - d * geom.opticalPupilY;
-    ctx.transform(a, b, c, d, e, f);
-    // Define the clip in frame-image coordinates after applying the same
-    // transform as the image. Clipping before transform used source pixel
-    // coordinates as portrait pixels and could clip both lenses off-face.
-    ctx.beginPath();
-    ctx.rect(left ? 0 : sourceCenterX, 0, left ? sourceCenterX : frameCanvas.width - sourceCenterX, frameCanvas.height);
-    ctx.clip();
-    ctx.shadowColor = 'rgba(15, 10, 22, 0.16)';
-    ctx.shadowBlur = Math.max(2, Math.min(6, (eyeSpan / scale) * 0.022));
-    ctx.shadowOffsetY = Math.max(1, Math.min(3, (eyeSpan / scale) * 0.01));
-    ctx.drawImage(frameCanvas, 0, 0);
-    ctx.restore();
-  };
-  drawHalf(true, leftPerspective);
-  drawHalf(false, rightPerspective);
+
+  ctx.save();
+  const a = scaleX * cosine;
+  const b = scaleX * sine + shearY * cosine;
+  const c = -scaleY * sine;
+  const d = scaleY * cosine;
+  const e = anchorX - a * sourceCenterX - c * geom.opticalPupilY;
+  const f = anchorY - b * sourceCenterX - d * geom.opticalPupilY;
+  ctx.transform(a, b, c, d, e, f);
+
+  ctx.shadowColor = 'rgba(10, 6, 18, 0.30)';
+  ctx.shadowBlur = Math.max(4, Math.min(12, eyeSpan * 0.05));
+  ctx.shadowOffsetY = Math.max(2, Math.min(5, eyeSpan * 0.025));
+
+  ctx.drawImage(frameCanvas, 0, 0);
+  ctx.restore();
   return composite;
 }
 
@@ -491,7 +850,7 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
   const [fitOffsetX, setFitOffsetX] = useState(0);
   const [fitRotate, setFitRotate] = useState(0);
 
-  const cachedPointsRef = useRef<{ x: number; y: number }[] | null>(null);
+  const cachedPointsRef = useRef<{ x: number; y: number; z?: number }[] | null>(null);
   const cachedInputCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const cachedFrameImageRef = useRef<HTMLImageElement | null>(null);
   const cachedDimsRef = useRef<{ width: number; height: number } | null>(null);
@@ -537,6 +896,68 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
     applyLiveAdjustment(1, 0, 0, 0);
   };
 
+  // AI Generative Try-On & Photorealistic Inpainting (Cloudflare Workers AI)
+  const [aiEnhanceBusy, setAiEnhanceBusy] = useState(false);
+  const [aiEnhancedResult, setAiEnhancedResult] = useState<string | null>(null);
+  const [aiEnhancedFaceCrop, setAiEnhancedFaceCrop] = useState<string | null>(null);
+  const [isAiBlended, setIsAiBlended] = useState(false);
+
+  const handleAiEnhance = async () => {
+    if (!result || aiEnhanceBusy) return;
+    setAiEnhanceBusy(true);
+    setError('');
+    try {
+      let faceBox: { left: number; top: number; width: number; height: number } | undefined = undefined;
+      if (cachedPointsRef.current && cachedDimsRef.current) {
+        let minX = 1, maxX = 0, minY = 1, maxY = 0;
+        for (const p of cachedPointsRef.current) {
+          minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+          minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+        }
+        const { width, height } = cachedDimsRef.current;
+        const padX = (maxX - minX) * 0.35;
+        const padY = (maxY - minY) * 0.35;
+        faceBox = {
+          left: Math.round(Math.max(0, minX - padX) * width),
+          top: Math.round(Math.max(0, minY - padY) * height),
+          width: Math.round(Math.min(1, (maxX - minX) + padX * 2) * width),
+          height: Math.round(Math.min(1, (maxY - minY) + padY * 2) * height),
+        };
+      }
+
+      const response = await fetch('/api/photo/enhance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          compositeImage: result,
+          faceBox,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'AI enhancement failed');
+      if (data.image) {
+        setAiEnhancedResult(data.image);
+        setIsAiBlended(true);
+        if (cachedPointsRef.current && cachedDimsRef.current && cachedInputCanvasRef.current) {
+          const aiImg = new Image();
+          aiImg.src = data.image;
+          await aiImg.decode();
+          const aiCanvas = document.createElement('canvas');
+          aiCanvas.width = cachedDimsRef.current.width;
+          aiCanvas.height = cachedDimsRef.current.height;
+          const aiCtx = aiCanvas.getContext('2d')!;
+          aiCtx.drawImage(aiImg, 0, 0);
+          const crops = createPhotoCrops(aiCanvas, cachedInputCanvasRef.current, cachedPointsRef.current, cachedDimsRef.current.width, cachedDimsRef.current.height);
+          setAiEnhancedFaceCrop(crops.fitted);
+        }
+      }
+    } catch (err: any) {
+      setError(err.message || 'AI Enhancement failed. Please check your connection.');
+    } finally {
+      setAiEnhanceBusy(false);
+    }
+  };
+
   const request = useRef(0);
   const activeRun = useRef(0);
   const urlRef = useRef<string | null>(null);
@@ -580,21 +1001,26 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
       setCustomFrameEnabled(true);
       setResult(null); setFaceCropResult(null); setFaceCropOriginal(null); setError('');
       setFrameAiBusy(true);
-      setFrameAiMessage('Preparing Hugging Face ZeroGPU…');
-      const prepared = await processCustomFrameWithHostedAI(image, message => {
-        if (isCurrent()) setFrameAiMessage(message);
-      });
-      const preparedBlob = await new Promise<Blob>((resolve, reject) => prepared.toBlob(value => value ? resolve(value) : reject(Error('Could not prepare the sunglasses image.')), 'image/png'));
-      if (!isCurrent()) return;
-      const nextUrl = URL.createObjectURL(preparedBlob);
-      if (customFrameUrlRef.current && customFrameUrlRef.current !== customFrameSourceUrlRef.current) URL.revokeObjectURL(customFrameUrlRef.current);
-      customFrameUrlRef.current = nextUrl;
-      setCustomFrameUrl(nextUrl);
-      setCustomFrameAiReady(true);
-      setCustomFrameName('Original · ' + name);
-      setFitScale(1); setFitOffsetX(0); setFitOffsetY(0); setFitRotate(0);
-      setCustomFrameEnabled(true);
-      setResult(null); setFaceCropResult(null); setFaceCropOriginal(null); setError('');
+      setFrameAiMessage('Processing sunglasses image…');
+      try {
+        const prepared = await processCustomFrameWithHostedAI(image, message => {
+          if (isCurrent()) setFrameAiMessage(message);
+        });
+        const preparedBlob = await new Promise<Blob>((resolve, reject) => prepared.toBlob(value => value ? resolve(value) : reject(Error('Could not prepare the sunglasses image.')), 'image/png'));
+        if (!isCurrent()) return;
+        const nextUrl = URL.createObjectURL(preparedBlob);
+        if (customFrameUrlRef.current && customFrameUrlRef.current !== customFrameSourceUrlRef.current) URL.revokeObjectURL(customFrameUrlRef.current);
+        customFrameUrlRef.current = nextUrl;
+        setCustomFrameUrl(nextUrl);
+        setCustomFrameAiReady(true);
+        setCustomFrameName('Fitted · ' + name);
+        setFitScale(1); setFitOffsetX(0); setFitOffsetY(0); setFitRotate(0);
+        setCustomFrameEnabled(true);
+        setResult(null); setFaceCropResult(null); setFaceCropOriginal(null); setError('');
+      } catch (err) {
+        console.warn('Custom frame preparation warning:', err);
+        setCustomFrameAiReady(true);
+      }
     } finally {
       if (customFrameSourceUrlRef.current !== sourceUrl && customFrameUrlRef.current !== sourceUrl) URL.revokeObjectURL(sourceUrl);
       if (isCurrent()) { setFrameAiBusy(false); setFrameAiMessage(''); }
@@ -651,7 +1077,7 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
       const sourceImage = new Image();
       sourceImage.src = sourceUrl;
       await sourceImage.decode();
-      setFrameAiMessage('Preparing Hugging Face ZeroGPU…');
+      setFrameAiMessage('Processing sunglasses frame…');
       const preparedCanvas = await processCustomFrameWithHostedAI(sourceImage, message => {
         if (id === frameRequest.current) setFrameAiMessage(message);
       });
@@ -668,12 +1094,12 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
       customFrameUrlRef.current = nextUrl;
       setCustomFrameUrl(nextUrl);
       setCustomFrameAiReady(true);
-      setCustomFrameName(previous => previous.startsWith('Original ·') ? previous : `Background removed · ${previous}`);
-      setResult(null); setFaceCropResult(null); setFaceCropOriginal(null);
+      setCustomFrameName(previous => previous.startsWith('Original ·') ? previous.replace('Original ·', 'Fitted ·') : `Fitted · ${previous}`);
       return nextUrl;
     } catch (e) {
-      if (id === frameRequest.current) setError(e instanceof Error ? e.message : 'Could not level this sunglasses image.');
-      return null;
+      console.warn('Could not level sunglasses image, using current source:', e);
+      setCustomFrameAiReady(true);
+      return customFrameUrlRef.current || sourceUrl;
     } finally {
       if (id === frameRequest.current) setFrameBusy(false);
       if (id === frameRequest.current) { setFrameAiBusy(false); setFrameAiMessage(''); }
@@ -896,7 +1322,8 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
           setResult(composite.toDataURL('image/png'));
           setFaceCropResult(outputs.fitted);
           setFaceCropOriginal(outputs.original);
-          setViewMode('full');
+          const faceVerticalSpan = Math.abs(points[152].y - points[10].y);
+          setViewMode(faceVerticalSpan < 0.32 ? 'face' : 'full');
           setSplit(0);
         }
         return;
@@ -1031,6 +1458,8 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
         setResult(fullResultUrl);
         setFaceCropResult(outputs.fitted);
         setFaceCropOriginal(outputs.original);
+        const faceVerticalSpan = Math.abs(points[152].y - points[10].y);
+        setViewMode(faceVerticalSpan < 0.32 ? 'face' : 'full');
       }
     } catch (e) {
       if (runId === activeRun.current) {
@@ -1054,10 +1483,12 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
   // Fit automatically whether the portrait or the processed sunglasses arrive
   // first. The input card continues to show the untouched sunglasses source.
   useEffect(() => {
-    if (photo && customFrameEnabled && customFrameAiReady && !result && !busy) {
+    if (photo && customFrameEnabled && customFrameAiReady && !busy) {
+      void handleTryOn();
+    } else if (photo && !customFrameEnabled && !busy && !result) {
       void handleTryOn();
     }
-  }, [photo, customFrameEnabled, customFrameAiReady]);
+  }, [photo, customFrameEnabled, customFrameAiReady, customFrameUrl]);
 
   return (
     <article className="photo-workspace">
@@ -1122,10 +1553,10 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
                 </div>
               )}
 
-              <div className={`photo-asset-preview photo-face-preview ${photo ? 'has-photo !border-none' : ''} !h-72 !rounded-2xl relative overflow-hidden`}>
+              <div className={`photo-asset-preview photo-face-preview ${photo ? 'has-photo !border-none' : ''} !h-72 !rounded-2xl relative overflow-hidden bg-[#130d1d]`}>
                 {photo ? (
                   <>
-                    {/* Ambient blurred background clone to eliminate black side bars */}
+                    {/* Ambient blurred background clone */}
                     <img
                       src={photo}
                       alt=""
@@ -1133,30 +1564,30 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
                       className="absolute inset-0 w-full h-full object-cover blur-xl opacity-35 scale-110 pointer-events-none"
                     />
                     {/* Sharp portrait image on top */}
-                    <img src={photo} alt="Face photo for try-on" className="relative z-10 w-full h-full object-cover object-top rounded-2xl" />
+                    <img src={photo} alt="Face photo for try-on" className="photo-main-img relative z-10 w-full h-full object-cover object-top rounded-2xl" />
 
                     {/* Floating face verification badge */}
                     {faceStatus === 'checking' && (
-                      <div className="face-pill checking">
-                        <Sparkles size={11} className="animate-spin" />
+                      <div className="face-pill checking !absolute !top-3 !left-3 !z-30 backdrop-blur-md bg-black/60 border border-white/20 px-2.5 py-1 rounded-full text-xs text-white flex items-center gap-1.5 shadow-lg">
+                        <Sparkles size={11} className="animate-spin text-purple-400" />
                         <span>Verifying face…</span>
                       </div>
                     )}
                     {faceStatus === 'detected' && (
-                      <div className="face-pill valid">
-                        <CheckCircle2 size={11} />
-                        <span>{'Human Face Detected'}</span>
+                      <div className="face-pill valid !absolute !top-3 !left-3 !z-30 backdrop-blur-md bg-emerald-950/80 border border-emerald-500/40 px-2.5 py-1 rounded-full text-xs text-emerald-300 flex items-center gap-1.5 shadow-lg">
+                        <CheckCircle2 size={12} className="text-emerald-400" />
+                        <span>Human Face Detected</span>
                       </div>
                     )}
                     {faceStatus === 'no_face' && (
-                      <div className="face-pill no-face">
-                        <AlertTriangle size={11} />
+                      <div className="face-pill no-face !absolute !top-3 !left-3 !z-30 backdrop-blur-md bg-amber-950/80 border border-amber-500/40 px-2.5 py-1 rounded-full text-xs text-amber-300 flex items-center gap-1.5 shadow-lg">
+                        <AlertTriangle size={12} className="text-amber-400" />
                         <span>No Face Detected</span>
                       </div>
                     )}
 
                     <button
-                      className="photo-remove"
+                      className="photo-remove !absolute !top-3 !right-3 !z-30 hover:scale-105 transition"
                       aria-label="Remove photo"
                       onClick={() => {
                         request.current++;
@@ -1171,9 +1602,16 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
                         setBusy(false);
                       }}
                     >
-                      <X size={18} />
+                      <X size={16} />
                     </button>
-                    <span className="photo-filename">{filename}</span>
+
+                    {/* Clean luxury bottom bar matching Card 2 */}
+                    <div className="absolute bottom-0 inset-x-0 z-30 bg-[#130d1d]/90 backdrop-blur-md px-3.5 py-2.5 flex items-center justify-between border-t border-purple-500/20 text-xs text-[#e9d5ff]">
+                      <span className="truncate max-w-[170px] font-semibold">{filename || 'Portrait Photo'}</span>
+                      <span className="text-[10px] text-emerald-400 font-semibold flex items-center gap-1">
+                        <CheckCircle2 size={11} /> Ready for fit
+                      </span>
+                    </div>
 
                     {/* Prominent warning if the user loaded sunglasses/non-face in this slot */}
                     {faceStatus === 'no_face' && (
@@ -1614,16 +2052,81 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
           <div className={`photo-result-stage ${zoom > 1 ? 'photo-result-zoomed' : ''} bg-[linear-gradient(to_right,#ffffff06_1px,transparent_1px),linear-gradient(to_bottom,#ffffff06_1px,transparent_1px)] bg-[size:24px_24px]`}>
             <div className="photo-zoom-content" style={{ width: `${zoom * 100}%`, height: `${zoom * 100}%`, position: 'relative' }}>
               
-              {/* Sleek Centered Glass Pill Toggle at top-4 */}
+              {/* Interactive View & Compare Switcher */}
               <div className="absolute top-4 inset-x-0 z-30 flex justify-center pointer-events-none">
-                <div className="pointer-events-auto flex items-center gap-1 bg-black/60 backdrop-blur-md border border-white/15 rounded-full p-1 shadow-xl">
-                  <span className="px-3.5 py-1 rounded-full text-[10px] font-mono font-bold uppercase tracking-wider text-slate-300">
-                    ORIGINAL {viewMode === 'face' && faceCropOriginal ? '(FACE)' : ''}
-                  </span>
-                  <div className="w-[1px] h-3.5 bg-white/20" />
-                  <span className="px-3.5 py-1 rounded-full text-[10px] font-mono font-bold uppercase tracking-wider bg-purple-600/40 text-purple-200 border border-purple-400/40 shadow-sm">
-                    {result ? (viewMode === 'face' && faceCropResult ? 'FACE TRY-ON' : 'PREVIEW') : 'PREVIEW'}
-                  </span>
+                <div className="pointer-events-auto flex items-center gap-1.5 bg-black/80 backdrop-blur-md border border-white/20 rounded-full p-1 shadow-2xl">
+                  {faceCropResult ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => setViewMode('face')}
+                        className={`px-3 py-1 rounded-full text-[11px] font-semibold transition flex items-center gap-1.5 cursor-pointer ${
+                          viewMode === 'face'
+                            ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-md'
+                            : 'text-slate-300 hover:text-white hover:bg-white/10'
+                        }`}
+                        title="Zoom in on face for high-detail fitting"
+                      >
+                        <ScanFace size={13} />
+                        <span>Face Focus</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setViewMode('full')}
+                        className={`px-3 py-1 rounded-full text-[11px] font-semibold transition flex items-center gap-1.5 cursor-pointer ${
+                          viewMode === 'full'
+                            ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-md'
+                            : 'text-slate-300 hover:text-white hover:bg-white/10'
+                        }`}
+                        title="View full portrait"
+                      >
+                        <Maximize2 size={12} />
+                        <span>Full Photo</span>
+                      </button>
+                      <div className="w-[1px] h-3.5 bg-white/20 mx-0.5" />
+                    </>
+                  ) : (
+                    <span className="px-3 py-1 rounded-full text-[10px] font-mono font-bold uppercase tracking-wider text-slate-300">
+                      PREVIEW
+                    </span>
+                  )}
+                  {result && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => setSplit(s => s > 0 ? 0 : 50)}
+                        className={`px-3 py-1 rounded-full text-[11px] font-semibold transition flex items-center gap-1 cursor-pointer ${
+                          split > 0
+                            ? 'bg-emerald-600/80 text-white border border-emerald-400/50'
+                            : 'text-slate-300 hover:text-white hover:bg-white/10'
+                        }`}
+                        title="Split compare original photo vs fitted eyewear"
+                      >
+                        <span>↔ Compare {split > 0 ? 'On' : 'Off'}</span>
+                      </button>
+                      <div className="w-[1px] h-3.5 bg-white/20 mx-0.5" />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!aiEnhancedResult) {
+                            void handleAiEnhance();
+                          } else {
+                            setIsAiBlended(b => !b);
+                          }
+                        }}
+                        disabled={aiEnhanceBusy}
+                        className={`px-3 py-1 rounded-full text-[11px] font-semibold transition flex items-center gap-1.5 cursor-pointer ${
+                          isAiBlended && aiEnhancedResult
+                            ? 'bg-gradient-to-r from-amber-500 to-rose-500 text-white shadow-lg border border-amber-300/40'
+                            : 'bg-violet-600/50 hover:bg-violet-600/80 text-violet-200 border border-violet-400/40 hover:text-white'
+                        } disabled:opacity-50`}
+                        title="Photorealistic AI Inpainting with skin reflections, soft shadows, and realistic lighting"
+                      >
+                        <Sparkles size={12} className={aiEnhanceBusy ? 'animate-spin' : ''} />
+                        <span>{aiEnhanceBusy ? 'AI Blending…' : isAiBlended && aiEnhancedResult ? '✓ AI Blend Active' : '✨ AI Studio Blend'}</span>
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
 
@@ -1640,7 +2143,10 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
                   {/* Main sharp portrait image on top */}
                   <img
                     className="photo-result-image relative z-10 h-full w-full object-contain"
-                    src={(viewMode === 'face' && faceCropResult ? faceCropResult : result) || photo}
+                    src={(viewMode === 'face'
+                      ? (isAiBlended && aiEnhancedFaceCrop ? aiEnhancedFaceCrop : faceCropResult)
+                      : (isAiBlended && aiEnhancedResult ? aiEnhancedResult : result)
+                    ) || photo}
                     alt={result ? `${product.name} fitted on your face` : 'Photo preview'}
                   />
                   {result && (
@@ -1712,8 +2218,8 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
                   </div>
                   <input
                     type="range"
-                    min="0.75"
-                    max="1.35"
+                    min="0.65"
+                    max="1.50"
                     step="0.01"
                     value={fitScale}
                     onChange={(e) => applyLiveAdjustment(Number(e.target.value), fitOffsetY, fitOffsetX, fitRotate)}
@@ -1729,8 +2235,8 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
                   </div>
                   <input
                     type="range"
-                    min="-35"
-                    max="35"
+                    min="-60"
+                    max="60"
                     step="1"
                     value={fitOffsetY}
                     onChange={(e) => applyLiveAdjustment(fitScale, Number(e.target.value), fitOffsetX, fitRotate)}
@@ -1822,7 +2328,7 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
                 {faceCropResult && (
                   <a
                     className="photo-download secondary px-3 py-1.5 rounded-lg bg-violet-950/60 border border-violet-500/30 hover:border-violet-400 text-violet-200 text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
-                    href={faceCropResult}
+                    href={(isAiBlended && aiEnhancedFaceCrop ? aiEnhancedFaceCrop : faceCropResult)}
                     download={`face-portrait-${product.id}.png`}
                     title="Download high-resolution face close-up"
                   >
@@ -1831,7 +2337,7 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
                 )}
                 <a
                   className="photo-download px-3.5 py-1.5 rounded-lg bg-gradient-to-r from-violet-600 to-purple-600 text-white text-xs font-bold flex items-center gap-1.5 shadow-md shadow-violet-500/25 transition hover:brightness-110 cursor-pointer"
-                  href={result}
+                  href={(isAiBlended && aiEnhancedResult ? aiEnhancedResult : result)}
                   download={`lumen-${product.id}.png`}
                   title="Download complete high-resolution try-on photo"
                 >

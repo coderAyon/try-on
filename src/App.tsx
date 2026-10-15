@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { flushSync } from 'react-dom';
 import { SUNGLASSES_CATALOG } from './data/catalog';
 import {
   SunglassesProduct,
@@ -31,6 +30,8 @@ import {
 import { ProductDetailsPage } from './components/Catalog/ProductDetailsPage';
 import { PhotoTryOnPage } from './components/Viewport/PhotoTryOnPage';
 import { GalleryPage } from './components/Gallery/GalleryPage';
+import { AboutPage } from './components/About/AboutPage';
+import { FramesCatalogPage } from './components/Catalog/FramesCatalogPage';
 import { AccountDrawer } from './components/Navigation/AccountDrawer';
 
 export const App: React.FC = () => {
@@ -42,12 +43,16 @@ export const App: React.FC = () => {
   const [photoPage, setPhotoPage] = useState<boolean>(
     () => window.location.hash === '#photo'
   );
+  // About Us popup modal window state (preserves active try-on in background)
+  const [isAboutModalOpen, setIsAboutModalOpen] = useState<boolean>(
+    () => window.location.hash === '#about'
+  );
   const [activeNav, setActiveNav] = useState<string>(() =>
     window.location.hash === '#photo'
       ? 'upload-photos'
       : window.location.hash === '#gallery'
       ? 'gallery'
-      : window.location.hash.startsWith('#frame/')
+      : window.location.hash === '#frames' || window.location.hash.startsWith('#frame/')
       ? 'frames'
       : 'try-on'
   );
@@ -108,8 +113,6 @@ export const App: React.FC = () => {
     }
   });
 
-  const isThemeTransitioningRef = useRef<boolean>(false);
-
   useEffect(() => {
     try {
       if (isDarkMode) {
@@ -125,58 +128,9 @@ export const App: React.FC = () => {
   }, [isDarkMode]);
 
   const handleToggleTheme = useCallback(() => {
-    if (isThemeTransitioningRef.current) return;
     soundEffects.playClick();
-
-    const newDarkMode = !isDarkMode;
-
-    const performThemeUpdate = () => {
-      if (newDarkMode) {
-        document.documentElement.classList.add('dark');
-        try { localStorage.setItem('lumen_theme', 'dark'); } catch {}
-      } else {
-        document.documentElement.classList.remove('dark');
-        try { localStorage.setItem('lumen_theme', 'light'); } catch {}
-      }
-      setIsDarkMode(newDarkMode);
-    };
-
-    const doc = typeof document !== 'undefined' ? document : null;
-    if (!doc) return;
-
-    // Use native View Transitions API if supported (Chrome 111+, Edge 111+, Safari 18+)
-    if (typeof (doc as any).startViewTransition === 'function') {
-      isThemeTransitioningRef.current = true;
-      try {
-        const transition = (doc as any).startViewTransition(() => {
-          flushSync(() => {
-            performThemeUpdate();
-          });
-        });
-        transition.finished
-          .catch(() => {})
-          .finally(() => {
-            isThemeTransitioningRef.current = false;
-          });
-      } catch {
-        // Fallback in case startViewTransition throws unexpectedly
-        doc.documentElement.classList.add('theme-transitioning');
-        performThemeUpdate();
-        setTimeout(() => {
-          doc.documentElement.classList.remove('theme-transitioning');
-          isThemeTransitioningRef.current = false;
-        }, 380);
-      }
-    } else {
-      isThemeTransitioningRef.current = true;
-      doc.documentElement.classList.add('theme-transitioning');
-      performThemeUpdate();
-      setTimeout(() => {
-        doc.documentElement.classList.remove('theme-transitioning');
-        isThemeTransitioningRef.current = false;
-      }, 380);
-    }
-  }, [isDarkMode]);
+    setIsDarkMode((prev) => !prev);
+  }, []);
 
   const [products, setProducts] = useState<SunglassesProduct[]>(SUNGLASSES_CATALOG);
   const [activeProduct, setActiveProduct] = useState<SunglassesProduct>(SUNGLASSES_CATALOG[0]);
@@ -411,6 +365,14 @@ export const App: React.FC = () => {
       const isPhoto = hash === '#photo';
       setPhotoPage(isPhoto);
       const isGallery = hash === '#gallery';
+      const isAbout = hash === '#about';
+      const isFrames = hash === '#frames';
+
+      if (isAbout) {
+        setIsAboutModalOpen(true);
+      } else {
+        setIsAboutModalOpen(false);
+      }
 
       if (isPhoto) {
         setCameraEnabled(false);
@@ -418,10 +380,10 @@ export const App: React.FC = () => {
       } else if (isGallery) {
         setCameraEnabled(false);
         setActiveNav('gallery');
-      } else if (id) {
+      } else if (id || isFrames) {
         setCameraEnabled(false);
         setActiveNav('frames');
-      } else {
+      } else if (!isAbout) {
         setActiveNav('try-on');
       }
     };
@@ -649,8 +611,32 @@ export const App: React.FC = () => {
     );
   };
 
+  const handleOpenAbout = useCallback(() => {
+    soundEffects.playClick();
+    setIsAboutModalOpen(true);
+    window.location.hash = 'about';
+  }, []);
+
+  const handleCloseAbout = useCallback(() => {
+    soundEffects.playClick();
+    setIsAboutModalOpen(false);
+    if (window.location.hash === '#about') {
+      try {
+        history.replaceState(null, '', window.location.pathname + window.location.search);
+      } catch {
+        window.location.hash = '';
+      }
+    }
+  }, []);
+
   const handleNavChange = (nav: string) => {
     soundEffects.playClick();
+
+    if (nav === 'about') {
+      handleOpenAbout();
+      return;
+    }
+
     setActiveNav(nav);
 
     if (nav === 'try-on') {
@@ -665,11 +651,10 @@ export const App: React.FC = () => {
       setCameraEnabled(false);
       window.location.hash = 'gallery';
     } else if (nav === 'frames') {
-      openDetails(activeProduct);
-    } else if (nav === 'settings') {
-      setIsAccountDrawerOpen(true);
-    } else if (nav === 'about') {
-      handleOpenGlassFinder();
+      setDetailId(null);
+      setPhotoPage(false);
+      setCameraEnabled(false);
+      window.location.hash = 'frames';
     }
   };
 
@@ -719,7 +704,7 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div className={`relative min-h-screen ${isDarkMode ? 'bg-[#070b14]' : 'bg-[#f5f6fb]'} text-[#161132] dark:text-slate-100 font-sans flex flex-col justify-between selection:bg-[#6355f6] selection:text-white pb-6 overflow-x-hidden transition-colors duration-300`}>
+    <div className={`relative min-h-screen ${isDarkMode ? 'bg-[#070b14]' : 'bg-[#f5f6fb]'} text-[#161132] dark:text-slate-100 font-sans flex flex-col justify-between selection:bg-[#6355f6] selection:text-white pb-6 overflow-x-hidden transition-colors duration-150`}>
       {/* Ambient Mesh Gradient Glow Orbs (Bluish Dark Premium Atmosphere) */}
       <div className="fixed top-[-100px] left-[-80px] w-[500px] h-[500px] rounded-full bg-gradient-to-br from-[#6355f6]/12 dark:from-indigo-600/25 to-[#8b5cf6]/5 dark:to-cyan-600/10 blur-3xl pointer-events-none z-0 transition-all duration-700 ease-in-out will-change-transform" />
       <div className="fixed top-[30%] right-[-100px] w-[550px] h-[550px] rounded-full bg-gradient-to-bl from-[#38bdf8]/10 dark:from-blue-600/20 via-[#818cf8]/6 dark:via-indigo-500/15 to-transparent blur-3xl pointer-events-none z-0 transition-all duration-700 ease-in-out will-change-transform" />
@@ -731,8 +716,6 @@ export const App: React.FC = () => {
       <Header
         activeNav={activeNav}
         onNavChange={handleNavChange}
-        isAudioMuted={isAudioMuted}
-        onToggleAudio={handleToggleAudio}
         onOpenProfile={() => setIsAccountDrawerOpen(true)}
         currentUser={currentUser}
         isDarkMode={isDarkMode}
@@ -795,11 +778,34 @@ export const App: React.FC = () => {
           />
         ) : detailId ? (
           <ProductDetailsPage
-            product={activeProduct}
+            product={products.find((p) => p.id === detailId) || activeProduct}
             variantIndex={variantIndex}
             onVariantChange={handleVariantChange}
-            onBack={closeDetails}
-            onTryOn={closeDetails}
+            onBack={() => {
+              setDetailId(null);
+              window.location.hash = 'frames';
+            }}
+            onTryOn={() => {
+              const current = products.find((p) => p.id === detailId) || activeProduct;
+              handleSelectProduct(current);
+              closeDetails();
+            }}
+          />
+        ) : activeNav === 'frames' ? (
+          <FramesCatalogPage
+            products={products}
+            activeProduct={activeProduct}
+            onSelectProduct={handleSelectProduct}
+            onViewDetails={(p) => {
+              openDetails(p);
+            }}
+            onTryOn={(p) => {
+              handleSelectProduct(p);
+              closeDetails();
+            }}
+            onBackToFittingRoom={closeDetails}
+            wishlist={wishlist}
+            onToggleWishlist={handleToggleWishlist}
           />
         ) : (
           /* Main 2-Row Layout */
@@ -860,7 +866,7 @@ export const App: React.FC = () => {
                     products={products}
                     activeProduct={activeProduct}
                     onSelectProduct={handleSelectProduct}
-                    onViewAll={() => openDetails(activeProduct)}
+                    onViewAll={() => handleNavChange('frames')}
                     wishlist={wishlist}
                     onToggleWishlist={handleToggleWishlist}
                   />
@@ -872,12 +878,13 @@ export const App: React.FC = () => {
             <div className="flex flex-col lg:flex-row gap-5 items-stretch">
               {/* Left Column: Find Your Perfect Fit Card (Parallel with Instruction Banner) */}
               <div className="w-full lg:w-[210px] xl:w-[224px] flex-shrink-0 flex flex-col">
-                <FindYourFitCard onOpenFitAdvisor={handleOpenGlassFinder} />
+                <FindYourFitCard onOpenFitAdvisor={handleOpenGlassFinder} className="h-full" />
               </div>
 
               {/* Right Column: Wide Instruction Banner with 4 Interactive Try-On Steps */}
-              <div className="flex-1 min-w-0">
+              <div className="flex-1 min-w-0 flex flex-col">
                 <InstructionBanner
+                  className="h-full"
                   cameraEnabled={cameraEnabled}
                   cameraError={cameraState.error}
                   onEnableCamera={enableCamera}
@@ -927,6 +934,17 @@ export const App: React.FC = () => {
         savedLooksCount={savedLooks.length}
         wishlistCount={wishlist.length}
         onOpenGallery={() => handleNavChange('gallery')}
+      />
+
+      {/* 5.5 About Us Modal Popup Window (Overlays live fitting room) */}
+      <AboutPage
+        isOpen={isAboutModalOpen}
+        onClose={handleCloseAbout}
+        onBackToFittingRoom={handleCloseAbout}
+        onExploreFrames={() => {
+          handleCloseAbout();
+          handleNavChange('frames');
+        }}
       />
 
       {/* 6. Real-Time Snapshot Saved Toast Notification */}

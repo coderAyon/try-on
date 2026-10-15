@@ -1,6 +1,6 @@
 export type FaceShape = 'Oval' | 'Round' | 'Square' | 'Heart' | 'Diamond';
 
-export type EyewearCategory = 'All' | 'Aviator' | 'Wayfarer' | 'Sport' | 'Hexagonal' | 'Round' | 'Cat-Eye' | 'Prada' | 'Matsuda' | 'RayBanNew' | 'Versace';
+export type EyewearCategory = 'All' | 'Aviator' | 'Wayfarer' | 'Sport' | 'Hexagonal' | 'Round' | 'Cat-Eye' | 'Square' | 'Prada' | 'Matsuda' | 'RayBanNew' | 'Versace';
 
 export interface ColorVariant {
   name: string;
@@ -70,6 +70,7 @@ export interface FaceMeasurements {
   jawToCheek: number;
   foreheadToCheek: number;
   foreheadToJaw?: number;
+  chinToJaw?: number;
   shape?: FaceShape;
   confidence?: number;
   scores?: Record<FaceShape, number>;

@@ -12,6 +12,7 @@ export interface EyewearGeometry {
   bridgeTopY: number;
   frontWidth: number;
   lensSpan: number;
+  lensHeight?: number;
   roll: number;
 }
 

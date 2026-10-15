@@ -124,9 +124,11 @@ export const LandmarkGlassesTryOn: React.FC<JeelizGlassesTryOnProps & { onCamera
           if (now - lastUi > 150) {
             setDetected(true);
             const angles = new THREE.Euler().setFromQuaternion(pose.quaternion, 'YXZ');
-            const frontal = Math.abs(angles.y) < .3 && Math.abs(angles.x) < .3 && Math.abs(angles.z) < .3;
-            if (!frontal) measurementSampler.reset();
-            const faceMeasurements = frontal ? measurementSampler.add(landmarks, sourceWidth, sourceHeight) : undefined;
+            const measurementAngles = new THREE.Euler().setFromQuaternion(rawPose!.quaternion, 'YXZ');
+            const frontal = Math.abs(measurementAngles.y) < .22 && Math.abs(measurementAngles.x) < .22 && Math.abs(measurementAngles.z) < .22;
+            const faceMeasurements = frontal
+              ? measurementSampler.add(landmarks, sourceWidth, sourceHeight)
+              : undefined;
             propsRef.current.onStatsUpdate?.({ fps: currentFps, faceDetected: true, landmarksCount: landmarks.length,
               estimatedIpdMm: 63 + (fit?.ipdOffsetMm ?? 0), trackingConfidence: 0, depthOcclusionActive: true,
               headYaw: Math.round(THREE.MathUtils.radToDeg(angles.y)), headPitch: Math.round(THREE.MathUtils.radToDeg(angles.x)),

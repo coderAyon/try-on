@@ -4,7 +4,7 @@ import {
   UploadCloud,
   Glasses,
   Image as ImageIcon,
-  Settings,
+  Info,
   ArrowRight,
   Sparkles,
   Zap,
@@ -29,7 +29,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'upload-photos', label: 'Upload Photos', icon: UploadCloud },
     { id: 'frames', label: 'Frames', icon: Glasses },
     { id: 'gallery', label: 'Gallery', icon: ImageIcon },
-    { id: 'settings', label: 'Settings', icon: Settings },
+    { id: 'about', label: 'About Us', icon: Info },
   ];
 
   return (

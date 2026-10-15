@@ -12,6 +12,7 @@ import { CameraOverlay } from './CameraOverlay';
 import { AcademicCVModal } from '../Controls/AcademicCVModal';
 import {
   Camera,
+  CameraOff,
   FlipHorizontal,
   RotateCw,
   RotateCcw,
@@ -201,65 +202,24 @@ export const ViewportContainer: React.FC<ViewportContainerProps> = ({
             </div>
 
             {/* Central Action Glass Box */}
-            <div className="relative z-10 max-w-md w-full bg-slate-950/75 backdrop-blur-xl border border-purple-500/25 rounded-[24px] p-6 sm:p-7 shadow-[0_12px_40px_rgba(0,0,0,0.6)] flex flex-col items-center">
-              <div className="relative w-16 h-16 rounded-full bg-gradient-to-br from-purple-600/30 to-indigo-600/20 border border-purple-400/40 flex items-center justify-center text-purple-300 mb-4 shadow-[0_0_24px_rgba(168,85,247,0.3)] animate-glow-ring">
-                <Camera size={28} strokeWidth={2.2} />
+            <div className="relative z-10 max-w-[260px] w-full bg-slate-950/80 backdrop-blur-xl border border-purple-500/20 rounded-[16px] p-3.5 shadow-[0_8px_28px_rgba(0,0,0,0.5)] flex flex-col items-center text-center">
+              <div className="relative w-9 h-9 rounded-full bg-gradient-to-br from-purple-600/30 to-indigo-600/20 border border-purple-400/30 flex items-center justify-center text-purple-300 mb-2 shadow-[0_0_14px_rgba(168,85,247,0.2)]">
+                <Camera size={17} strokeWidth={2.2} />
               </div>
-              
-              <h3 className="text-[19px] font-bold text-white mb-1.5 tracking-tight">AI Virtual Mirror Ready</h3>
-              <p className="text-[12.5px] text-slate-300 mb-6 leading-relaxed">
-                Start your live camera for 60 FPS face tracking, or test instantly with a photorealistic model without camera permissions.
+
+              <h3 className="text-[14px] font-bold text-white mb-0.5 tracking-tight">Virtual Mirror</h3>
+              <p className="text-[11px] text-slate-300/70 mb-3 leading-snug">
+                Enable your camera to try frames live.
               </p>
 
-              {/* Primary & Secondary Action Buttons */}
-              <div className="flex flex-col sm:flex-row items-center gap-3 w-full">
-                <button
-                  onClick={onEnableCamera}
-                  className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-[#6355f6] to-[#8b5cf6] hover:from-[#5242ee] hover:to-[#7c3aed] text-white px-5 py-3 rounded-full text-[13px] font-bold shadow-lg shadow-purple-600/35 hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer"
-                >
-                  <Camera size={16} />
-                  <span>Allow Camera</span>
-                </button>
-
-                <button
-                  onClick={() => {
-                    soundEffects.playClick();
-                    if (onSelectModel) {
-                      onSelectModel('/models_faces/female_oval.jpg');
-                    }
-                    onModeChange('demo');
-                  }}
-                  className="w-full flex items-center justify-center gap-2 bg-white/10 hover:bg-white/20 border border-white/20 text-white px-5 py-3 rounded-full text-[13px] font-semibold hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer"
-                >
-                  <Sparkles size={15} className="text-purple-300" />
-                  <span>Try Demo Model</span>
-                </button>
-              </div>
-
-              {/* Demo Model Selection Pills */}
-              <div className="flex items-center gap-2 mt-4 pt-4 border-t border-white/10 w-full justify-center">
-                <span className="text-[11px] text-slate-400 font-medium">Or quick pick:</span>
-                <button
-                  onClick={() => {
-                    soundEffects.playClick();
-                    if (onSelectModel) onSelectModel('/models_faces/female_oval.jpg');
-                    onModeChange('demo');
-                  }}
-                  className="text-[11px] px-2.5 py-1 rounded-full bg-white/5 hover:bg-white/15 text-slate-200 border border-white/10 transition-colors cursor-pointer"
-                >
-                  👤 Female (Oval)
-                </button>
-                <button
-                  onClick={() => {
-                    soundEffects.playClick();
-                    if (onSelectModel) onSelectModel('/models_faces/male_square.jpg');
-                    onModeChange('demo');
-                  }}
-                  className="text-[11px] px-2.5 py-1 rounded-full bg-white/5 hover:bg-white/15 text-slate-200 border border-white/10 transition-colors cursor-pointer"
-                >
-                  👤 Male (Square)
-                </button>
-              </div>
+              {/* Primary Action Button */}
+              <button
+                onClick={onEnableCamera}
+                className="w-full flex items-center justify-center gap-1.5 bg-gradient-to-r from-[#6355f6] to-[#8b5cf6] hover:from-[#5242ee] hover:to-[#7c3aed] text-white px-3 py-2 rounded-full text-[11.5px] font-bold shadow-md shadow-purple-600/30 hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer"
+              >
+                <Camera size={13} />
+                <span>Allow Camera</span>
+              </button>
             </div>
           </div>
         )}
@@ -326,107 +286,50 @@ export const ViewportContainer: React.FC<ViewportContainerProps> = ({
           </div>
         )}
 
-        {/* Top Right: HD Badge and Academic CV / Snapshot Button */}
-        <div className="absolute top-4 right-4 z-20 flex items-center gap-2">
-          <div className="bg-black/45 backdrop-blur-md border border-white/30 px-2.5 py-1 rounded-full text-white text-[10px] font-bold tracking-wider uppercase shadow-sm">
-            HD 60FPS
-          </div>
-
-          <button
-            onClick={() => setShowAcademicModal(true)}
-            title="Open Computer Vision Telemetry"
-            className="w-7 h-7 rounded-full bg-black/45 backdrop-blur-md border border-white/30 text-white flex items-center justify-center hover:bg-black/70 hover:scale-105 active:scale-95 transition-all cursor-pointer shadow-sm text-[11px] font-mono"
-          >
-            CV
-          </button>
-        </div>
-
         {/* =========================================================================
-            Bottom Center: Modern Frosted Glassmorphism Action Dock
+            Bottom Center: Minimal Action Dock (Only Snap & Turn Off)
             ========================================================================= */}
-        <div className="absolute bottom-3 sm:bottom-4 inset-x-0 z-30 flex justify-center pointer-events-none px-2 sm:px-4">
-          <div className="pointer-events-auto flex items-center gap-1.5 sm:gap-2.5 px-3 sm:px-4 py-1.5 sm:py-2 rounded-2xl bg-white/10 backdrop-blur-xl border border-white/15 shadow-2xl max-w-full overflow-x-auto no-scrollbar">
-            
-            {/* 1. Before / After Comparison Slider Toggle */}
-            <button
-              onClick={() => {
-                soundEffects.playClick();
-                setIsSplitActive(!isSplitActive);
-              }}
-              title="Toggle Before/After Comparison Slider"
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-semibold transition-all cursor-pointer ${
-                isSplitActive 
-                  ? 'bg-purple-600 text-white shadow-[0_0_12px_rgba(168,85,247,0.5)]' 
-                  : 'bg-white/10 hover:bg-white/20 text-slate-200'
-              }`}
-            >
-              <SlidersHorizontal size={13} strokeWidth={2.2} />
-              <span className="hidden sm:inline">Split</span>
-            </button>
-
-            {/* 2. Rescan AI Face */}
-            <button
-              onClick={() => {
-                soundEffects.playClick();
-                setIsScanningFace(true);
-                setTimeout(() => setIsScanningFace(false), 2600);
-              }}
-              title="Rescan Face Landmarks"
-              className="w-8 h-8 rounded-xl bg-white/10 hover:bg-white/20 text-slate-200 flex items-center justify-center transition-all cursor-pointer"
-            >
-              <Scan size={14} strokeWidth={2} />
-            </button>
-
-            <div className="w-[1px] h-4 bg-white/15" />
-
-            {/* 3. Primary Camera Shutter (Capture Photo) */}
+        <div className="absolute bottom-2.5 sm:bottom-3 inset-x-0 z-30 flex justify-center pointer-events-none px-2 sm:px-4">
+          <div className="pointer-events-auto flex items-center gap-1.5 px-2 py-1 rounded-xl bg-black/60 backdrop-blur-xl border border-white/15 shadow-lg">
+            {/* 1. Primary Camera Shutter (Snap Photo) */}
             <button
               onClick={handleSnapshotClick}
-              title="Capture High-Res Photo"
-              className="relative group w-9 h-9 rounded-xl bg-white text-slate-950 flex items-center justify-center shadow-lg hover:scale-105 active:scale-95 transition-all cursor-pointer"
+              title="Capture High-Res Photo (Snap)"
+              className="relative group w-6.5 h-6.5 sm:w-7 sm:h-7 rounded-lg bg-white/95 hover:bg-white text-slate-950 flex items-center justify-center shadow-sm hover:scale-105 active:scale-95 transition-all cursor-pointer"
             >
-              <div className="w-6 h-6 rounded-lg border-2 border-slate-950 flex items-center justify-center">
-                <div className="w-3.5 h-3.5 rounded-sm bg-slate-950 group-hover:scale-110 transition-transform" />
+              <div className="w-4 h-4 sm:w-4.5 sm:h-4.5 rounded-[4px] border-[1.5px] border-slate-950 flex items-center justify-center">
+                <div className="w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-[1.5px] bg-slate-950 group-hover:scale-110 transition-transform" />
               </div>
             </button>
 
-            {/* 4. Flip / Mirror View */}
-            <button
-              onClick={() => {
-                soundEffects.playClick();
-                onToggleMirror();
-              }}
-              title="Mirror / Flip View"
-              className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all cursor-pointer ${
-                mirror ? 'bg-purple-600/40 text-purple-200 border border-purple-400/40' : 'bg-white/10 hover:bg-white/20 text-slate-200'
-              }`}
-            >
-              <FlipHorizontal size={14} strokeWidth={2} />
-            </button>
+            <div className="w-[1px] h-3 sm:h-3.5 bg-white/20" />
 
-            {/* 5. Reset Calibration */}
-            <button
-              onClick={() => {
-                soundEffects.playClick();
-                onResetCalibration();
-              }}
-              title="Reset 3D Alignment & Calibration"
-              className="w-8 h-8 rounded-xl bg-white/10 hover:bg-white/20 text-slate-200 flex items-center justify-center transition-all cursor-pointer"
-            >
-              <RotateCcw size={14} strokeWidth={2} />
-            </button>
-
-            <div className="w-[1px] h-4 bg-white/15" />
-
-            {/* 6. Switch / Toggle Camera */}
-            <button
-              onClick={handleSwitchCameraClick}
-              title={cameraEnabled ? "Switch Camera / Reconnect" : "Start Live Webcam"}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/15 hover:bg-white/25 text-white text-[11px] font-semibold border border-white/20 transition-all cursor-pointer shadow-sm"
-            >
-              <Camera size={13} strokeWidth={2.2} />
-              <span className="hidden sm:inline">{cameraEnabled ? 'Switch Camera' : 'Start Camera'}</span>
-            </button>
+            {/* 2. Turn Off / Toggle Camera */}
+            {cameraEnabled ? (
+              <button
+                onClick={() => {
+                  soundEffects.playClick();
+                  onStopCamera();
+                }}
+                title="Turn Off Camera"
+                className="flex items-center gap-1 px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-lg bg-red-500/15 hover:bg-red-500/25 text-red-200 hover:text-white border border-red-500/25 text-[10px] sm:text-[10.5px] font-medium transition-all cursor-pointer shadow-sm active:scale-95"
+              >
+                <CameraOff size={11} strokeWidth={2.2} className="text-red-300" />
+                <span>Turn Off</span>
+              </button>
+            ) : (
+              <button
+                onClick={() => {
+                  soundEffects.playClick();
+                  onEnableCamera();
+                }}
+                title="Start Live Camera"
+                className="flex items-center gap-1 px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-lg bg-purple-600/70 hover:bg-purple-600 text-white border border-purple-400/30 text-[10px] sm:text-[10.5px] font-medium transition-all cursor-pointer shadow-sm active:scale-95"
+              >
+                <Camera size={11} strokeWidth={2.2} />
+                <span>Start Camera</span>
+              </button>
+            )}
           </div>
         </div>
 

@@ -1,41 +1,70 @@
-import type { SunglassesProduct } from '../types';
+import type { SunglassesProduct, EyewearCategory } from '../types';
 
-type Entry = { id: string; name: string; file: string; nodes?: string[]; rotationY?: number; lensMeshes?: string[]; anchorMeshes?: string[]; trimLensToAnchor?: boolean; excludeNodes?: string[]; localGeometry?: boolean; scaleMultiplier?: number; offsetY?: number; offsetZ?: number };
+type Entry = {
+  id: string;
+  name: string;
+  file: string;
+  category: EyewearCategory;
+  nodes?: string[];
+  rotationY?: number;
+  lensMeshes?: string[];
+  anchorMeshes?: string[];
+  trimLensToAnchor?: boolean;
+  excludeNodes?: string[];
+  localGeometry?: boolean;
+  scaleMultiplier?: number;
+  offsetY?: number;
+  offsetZ?: number;
+};
+
+// Curated list of unique, high-quality distinct 3D models with proper categories (no duplicates)
 const entries: Entry[] = [
-  { id: 'fano', name: 'Fano Lens', file: 'fano.glb', excludeNodes: ['Plane'] },
-  { id: 'pixel', name: '8-Bit Sunglasses', file: '8bit_sunglass.glb', lensMeshes: ['Cube_1'] },
-  { id: 'obj-classic', name: 'Classic Optical Frame', file: 'Glasses.obj', offsetY: 0.14 },
-  { id: 'green-round', name: 'Green Round Sunglasses', file: 'green_round_sunglasses.glb' },
-  { id: 'rayban-junior', name: 'Ray-Ban Junior', file: 'maya_3d_modeling_of_rayban_glasses_for_children.glb', lensMeshes: ['Object_2'] },
-  { id: 'meta-quest', name: 'Meta Ray-Ban Black', file: 'me_taquest_ra_yba.glb' },
-  { id: 'mustang', name: 'Mustang MU 1683', file: 'mustang_sunglasses_-_mu_1683.glb', lensMeshes: ['Plane_Mustang_0'] },
-  { id: 'meta-red', name: 'Ray-Ban Meta Red', file: 'ray-ban_meta_smart_glasses_3d_model.glb', rotationY: -.192, lensMeshes: ['Object_22'] },
-  { id: 'stylized-full', name: 'Stylized Full Frame', file: 'stylized_eyeglasses_set___3d_model_pack.glb', nodes: ['Large_Framed_Glasses_'], offsetY: 0.14 },
-  { id: 'stylized-brow', name: 'Stylized Browline', file: 'stylized_eyeglasses_set___3d_model_pack.glb', nodes: ['Top_Framed_Glasses'], offsetY: 0.14 },
-  { id: 'sunglass-1', name: 'Sunglasses 01', file: 'sunglass (1).glb', rotationY: Math.PI / 2 },
-  { id: 'sunglass-2', name: 'Wolf Optical Frame', file: 'sunglass (2).glb', localGeometry: true, offsetY: 0.16 },
-  { id: 'sunglass-3', name: 'Sunglasses 03', file: 'sunglass (3).glb' },
-  { id: 'sunglass-4', name: 'Black & Gold Sunglasses', file: 'sunglass (4).glb', rotationY: Math.PI / 2 },
-  { id: 'sunglass-original', name: 'Sunglasses Original', file: 'sunglass.glb' },
-  { id: 'fly', name: 'Fly Sunglasses', file: 'Sunglass2.glb', scaleMultiplier: 0.85, offsetY: 0.38, offsetZ: 0.12 },
-  { id: 'pack-black', name: 'Black Wide Frame', file: 'sunglasses_pack.glb', nodes: ['Cube010', 'Plane'], offsetY: 0.18 },
-  { id: 'pack-white', name: 'White Square Frame', file: 'sunglasses_pack.glb', nodes: ['Cube002', 'Cube004', 'Plane002'], offsetY: 0.18 },
-  { id: 'pack-green', name: 'Green Round Metal', file: 'sunglasses_pack.glb', nodes: ['Cylinder004', 'Cube005', 'Cylinder005', 'Cylinder006'] },
-  { id: 'pack-aviator', name: 'Green Gold Aviator', file: 'sunglasses_pack.glb', nodes: ['Cube006', 'Cylinder008', 'Cube008', 'Cube007', 'Torus', 'Cube009', 'Cube003'] },
-  { id: 'vuzix', name: 'Vuzix Blade Smart Glasses', file: 'vuzix_blade_smart_glasses.glb', scaleMultiplier: 0.94, offsetY: 0.40, offsetZ: 0.06 },
+  { id: 'fano', name: 'Fano Silhouette', category: 'Cat-Eye', file: 'fano.glb', excludeNodes: ['Plane'] },
+  { id: 'pixel', name: '8-Bit Retro Sunglasses', category: 'Square', file: '8bit_sunglass.glb', lensMeshes: ['Cube_1'] },
+  { id: 'obj-classic', name: 'Classic Optical Frame', category: 'Round', file: 'Glasses.obj', offsetY: 0.14 },
+  { id: 'rayban-junior', name: 'Ray-Ban Junior', category: 'Wayfarer', file: 'maya_3d_modeling_of_rayban_glasses_for_children.glb', lensMeshes: ['Object_2'] },
+  { id: 'mustang', name: 'Mustang MU 1683', category: 'Cat-Eye', file: 'mustang_sunglasses_-_mu_1683.glb', lensMeshes: ['Plane_Mustang_0'] },
+  { id: 'stylized-brow', name: 'Classic Browline', category: 'Square', file: 'stylized_eyeglasses_set___3d_model_pack.glb', nodes: ['Top_Framed_Glasses'], offsetY: 0.14 },
+  { id: 'sunglass-2', name: 'Wolf Optical Frame', category: 'Square', file: 'sunglass (2).glb', localGeometry: true, offsetY: 0.16 },
+  { id: 'vuzix', name: 'Vuzix Blade Smart Glasses', category: 'Sport', file: 'vuzix_blade_smart_glasses.glb', scaleMultiplier: 0.94, offsetY: 0.40, offsetZ: 0.06 },
 ];
 
 export function createImportedCatalog(template: SunglassesProduct): SunglassesProduct[] {
-  return entries.map(entry => ({
+  return entries.map((entry) => ({
     ...template,
-    id: `imported-${entry.id}`, name: entry.name, brand: 'Model Library', modelCode: entry.file,
-    category: 'Wayfarer', price: 0, badge: 'Added Model', activeVariantIndex: 0,
-    description: 'Your imported eyewear model with its original materials and textures.',
-    frameMaterial: 'Original model finish', polarized: false,
+    id: `imported-${entry.id}`,
+    name: entry.name,
+    brand: 'Model Library',
+    modelCode: entry.file,
+    category: entry.category,
+    price: 0,
+    badge: 'Curated 3D',
+    activeVariantIndex: 0,
+    description: `A unique 3D eyewear model featuring custom CAD geometry in ${entry.category.toLowerCase()} silhouette.`,
+    frameMaterial: 'Studio Finish',
+    polarized: false,
     thumbnailUrl: `/models/imported/thumbnails/${entry.id}.png`,
-    variants: [{ name: 'Original finish', frameHex: '#303030', lensHex: '#253d2c', metalness: .1, roughness: .25 }],
-    model: { path: `/models/imported/${encodeURIComponent(entry.file)}`, nodes: entry.nodes, rotationY: entry.rotationY,
-      lensMeshes: entry.lensMeshes, anchorMeshes: entry.anchorMeshes, trimLensToAnchor: entry.trimLensToAnchor, excludeNodes: entry.excludeNodes, localGeometry: entry.localGeometry,
-      scaleMultiplier: entry.scaleMultiplier, offsetY: entry.offsetY, offsetZ: entry.offsetZ },
+    variants: [
+      {
+        name: 'Original finish',
+        frameHex: '#303030',
+        lensHex: '#253d2c',
+        metalness: 0.1,
+        roughness: 0.25,
+      },
+    ],
+    model: {
+      path: `/models/imported/${encodeURIComponent(entry.file)}`,
+      nodes: entry.nodes,
+      rotationY: entry.rotationY,
+      lensMeshes: entry.lensMeshes,
+      anchorMeshes: entry.anchorMeshes,
+      trimLensToAnchor: entry.trimLensToAnchor,
+      excludeNodes: entry.excludeNodes,
+      localGeometry: entry.localGeometry,
+      scaleMultiplier: entry.scaleMultiplier,
+      offsetY: entry.offsetY,
+      offsetZ: entry.offsetZ,
+    },
   }));
 }

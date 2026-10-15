@@ -128,9 +128,11 @@ export const AccountDrawer: React.FC<AccountDrawerProps> = ({
           {/* Top Bar / Header */}
           <div className="p-5 sm:p-6 border-b border-[#f0edf7] dark:border-blue-900/40 flex items-center justify-between bg-gradient-to-r from-white via-[#faf9ff] to-white dark:from-[#0c1322] dark:via-[#0e172a] dark:to-[#0c1322]">
             <div className="flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-xl bg-[#6355f6]/10 dark:bg-cyan-500/20 text-[#6355f6] dark:text-cyan-300 flex items-center justify-center border border-[#6355f6]/20 dark:border-cyan-500/30 shadow-sm">
-                <Sparkles size={17} strokeWidth={2.3} />
-              </div>
+              <img
+                src="/logo.png"
+                alt="Lumen Vision"
+                className="w-8 h-8 rounded-xl object-contain shadow-xs flex-shrink-0"
+              />
               <div>
                 <h3 className="text-[15px] font-bold text-[#181236] dark:text-white leading-none">
                   {currentUser ? 'My Profile' : 'Lumen Account'}

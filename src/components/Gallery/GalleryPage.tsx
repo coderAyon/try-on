@@ -358,9 +358,16 @@ export const GalleryPage: React.FC<GalleryPageProps> = ({
 
               {/* Watermark Strip */}
               <div className="absolute bottom-3 left-4 right-4 bg-black/60 backdrop-blur-md px-3.5 py-1.5 rounded-xl border border-white/10 flex items-center justify-between text-[11px]">
-                <span className="font-mono text-[#a594ff] font-bold">
-                  LUMEN.VISION 3D VIRTUAL TRY-ON
-                </span>
+                <div className="flex items-center gap-2">
+                  <img
+                    src="/logo.png"
+                    alt="Lumen Vision"
+                    className="w-4 h-4 rounded object-contain flex-shrink-0"
+                  />
+                  <span className="font-mono text-[#a594ff] font-bold">
+                    LUMEN.VISION 3D VIRTUAL TRY-ON
+                  </span>
+                </div>
                 <span className="text-[#8c85a1]">
                   IPD: {selectedLook.ipdMm ? `${selectedLook.ipdMm}mm` : '63mm'} · Precision Fitted
                 </span>
