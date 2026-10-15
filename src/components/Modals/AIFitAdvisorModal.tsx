@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { X, Sparkles, ArrowRight, RefreshCw, Camera, ScanFace, Ruler } from 'lucide-react';
 import { FaceMeasurements, SunglassesProduct, TrackingStats } from '../../types';
-import { suggestFrames, FrameShape, FaceMeasurementScan, measurementsDiffer } from '../../utils/faceFitAdvisor';
+import { suggestFrames, FrameShape, LiveFaceAdvisor } from '../../utils/faceFitAdvisor';
 import { ProductThumbnail } from '../Catalog/ProductThumbnail';
 
 function ShapePreview({ shape }: { shape: FrameShape }) {
@@ -19,12 +19,12 @@ function ShapePreview({ shape }: { shape: FrameShape }) {
 interface Props { isOpen: boolean; onClose: () => void; onSelectProduct: (product: SunglassesProduct) => void; stats: TrackingStats; products: SunglassesProduct[]; cameraEnabled: boolean; onEnableCamera: () => void; activeProduct: SunglassesProduct; mirror: boolean; cameraMessage: string; cameraError: string }
 export const AIFitAdvisorModal: React.FC<Props> = ({ isOpen, onClose, onSelectProduct, stats, products, cameraEnabled, onEnableCamera, activeProduct, mirror, cameraMessage, cameraError }) => {
   const [measurement, setMeasurement] = useState<FaceMeasurements | null>(null);
-  const scan = useRef(new FaceMeasurementScan());
-  const scanStarted = useRef(0);
+  const advisor = useRef(new LiveFaceAdvisor());
+  const liveStats = useRef(stats); liveStats.current = stats;
   const [progress, setProgress] = useState(0);
   const before = useRef<HTMLCanvasElement>(null);
   const after = useRef<HTMLCanvasElement>(null);
-  const startScan = () => { scan.current.reset(); scanStarted.current = Date.now(); setProgress(0); setMeasurement(null); };
+  const startScan = () => { advisor.current.reset(Date.now()); setProgress(0); setMeasurement(null); };
   const panel = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!isOpen) { setMeasurement(null); return; }
@@ -35,21 +35,18 @@ export const AIFitAdvisorModal: React.FC<Props> = ({ isOpen, onClose, onSelectPr
     return () => { document.body.style.overflow = overflow; previous?.focus(); };
   }, [isOpen]);
   useEffect(() => {
-    const m = stats.faceMeasurements;
     if (!isOpen) return;
-    if (!cameraEnabled || !stats.faceDetected) {
-      scan.current.reset(); setProgress(0); setMeasurement(null); return;
-    }
-    if (!m || Date.now() - m.measuredAt >= 1000) {
-      scan.current.reset(); setProgress(0); return;
-    }
-    if (m.measuredAt <= scanStarted.current) return;
-    if (measurement && !measurementsDiffer(measurement, m)) return;
-    if (measurement) { scan.current.reset(); setMeasurement(null); }
-    const result = scan.current.add(m);
-    setProgress(Math.min(100, Math.round(scan.current.samples / 12 * 100)));
-    if (result) setMeasurement(result);
-  }, [isOpen, stats, measurement, cameraEnabled]);
+    const update = () => {
+      const latest = liveStats.current;
+      const state = advisor.current.update(latest.faceMeasurements, cameraEnabled && latest.faceDetected, Date.now());
+      setProgress(state.progress);
+      setMeasurement(state.measurement);
+    };
+    update();
+    // Expire the displayed result even if the camera stops publishing stats.
+    const timer = window.setInterval(update, 200);
+    return () => window.clearInterval(timer);
+  }, [isOpen, stats, cameraEnabled]);
   useEffect(() => {
     if (!isOpen) return;
     let frame = 0;

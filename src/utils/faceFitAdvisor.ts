@@ -120,6 +120,30 @@ export class FaceMeasurementScan {
   }
 }
 
+// Keep sampling after a result. Proportion thresholds detect large changes,
+// but cannot identify a person or decide whether future samples are needed.
+export class LiveFaceAdvisor {
+  private scan = new FaceMeasurementScan();
+  private result: FaceMeasurements | null = null;
+  private startedAt = 0;
+  reset(now: number) { this.scan.reset(); this.result = null; this.startedAt = now; }
+  update(sample: FaceMeasurements | undefined, faceDetected: boolean, now: number) {
+    if (!faceDetected || !sample || now - sample.measuredAt >= 1000) {
+      this.scan.reset(); this.result = null;
+      return { measurement: null, progress: 0 };
+    }
+    if (sample.measuredAt <= this.startedAt) return { measurement: this.result, progress: 0 };
+    if (this.result && measurementsDiffer(this.result, sample)) {
+      this.result = null; this.scan.reset();
+    }
+    // Similar-looking people can fall on different sides of a shape boundary.
+    // Refresh from the latest window even when no large ratio jump occurred.
+    const fresh = this.scan.add(sample);
+    if (fresh) this.result = fresh;
+    return { measurement: this.result, progress: Math.round(this.scan.samples / 12 * 100) };
+  }
+}
+
 export type FrameShape = 'Round' | 'Oval' | 'Square' | 'Flat' | 'Geometric' | 'Aviator';
 const groups: Record<FrameShape, string[]> = {
   Round: ['imported-obj-classic', 'matsuda-m2026'],
