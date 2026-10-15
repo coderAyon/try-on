@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { ChevronLeft, ChevronRight, Heart } from 'lucide-react';
 import { SunglassesProduct } from '../../types';
 import { soundEffects } from '../../utils/audio';
+import { prepareTryOnFrame } from '../../utils/tryOnFrame';
 
 interface FrameSelectorPanelProps {
   products: SunglassesProduct[];
@@ -168,9 +169,10 @@ export const FrameSelectorPanel: React.FC<FrameSelectorPanelProps> = ({
   const categories: Array<'All' | 'Men' | 'Women' | 'Unisex'> = ['All', 'Men', 'Women', 'Unisex'];
 
   // Filter frames by gender
+  const availableFrames = allFrames.filter(frame => products.some(product => product.id === frame.targetProductId));
   const filtered = activeCategory === 'All'
-    ? allFrames
-    : allFrames.filter((f) => f.gender === activeCategory || f.gender === 'Unisex');
+    ? availableFrames
+    : availableFrames.filter((f) => f.gender === activeCategory || f.gender === 'Unisex');
 
   // Split into Top and Bottom rows
   const half = Math.ceil(filtered.length / 2);
@@ -178,7 +180,7 @@ export const FrameSelectorPanel: React.FC<FrameSelectorPanelProps> = ({
   const rowBottomBase = filtered.slice(half);
 
   const ensureMinItems = (items: FrameItem[]) => {
-    if (items.length === 0) return allFrames.slice(0, 3);
+    if (items.length === 0) return availableFrames.slice(0, 3);
     let result = [...items];
     while (result.length < 3) {
       result = [...result, ...items];
@@ -253,12 +255,8 @@ export const FrameSelectorPanel: React.FC<FrameSelectorPanelProps> = ({
   };
 
   const handleSelectFrame = (frame: FrameItem) => {
-    const matched =
-      products.find((p) => p.id === frame.targetProductId) ||
-      products.find((p) => p.name.toLowerCase().includes(frame.name.toLowerCase())) ||
-      products[0];
-    soundEffects.playTryOnChime();
-    onSelectProduct(matched);
+    const matched = products.find(p => p.id === frame.targetProductId);
+    if (matched) onSelectProduct(matched);
   };
 
   const renderCard = (frame: FrameItem) => {
@@ -274,6 +272,12 @@ export const FrameSelectorPanel: React.FC<FrameSelectorPanelProps> = ({
     return (
       <div
         key={frame.id}
+        role="button"
+        tabIndex={0}
+        aria-label={'Try ' + frame.name}
+        onPointerEnter={() => { const product = products.find(p => p.id === frame.targetProductId); if (product) void prepareTryOnFrame(product).catch(() => {}); }}
+        onFocus={() => { const product = products.find(p => p.id === frame.targetProductId); if (product) void prepareTryOnFrame(product).catch(() => {}); }}
+        onKeyDown={e => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); handleSelectFrame(frame); } }}
         onClick={() => handleSelectFrame(frame)}
         className={`group relative flex flex-col justify-between h-[112px] sm:h-[120px] p-2.5 rounded-[18px] cursor-pointer transition-all duration-200 select-none ${
           isSelected

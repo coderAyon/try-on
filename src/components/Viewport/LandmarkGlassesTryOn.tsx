@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { FaceLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
 import { FaceMeasurementSampler } from '../../utils/faceFitAdvisor';
 import type { JeelizGlassesTryOnProps } from './JeelizGlassesTryOn';
-import { loadEyewearCADModel } from '../../utils/cadModelManager';
+import { loadTryOnFrame } from '../../utils/tryOnFrame';
 import { EyewearRig, eyewearPose, landmarkWorld, StableEyewearPose, faceSkullPose } from '../../utils/landmarkEyewear';
 import { generateStudioEnvironment } from '../../utils/environmentGenerator';
 import { openTryOnCamera, cameraErrorMessage } from '../../utils/cameraAccess';
@@ -21,6 +21,9 @@ export const LandmarkGlassesTryOn: React.FC<JeelizGlassesTryOnProps & { onCamera
   const [retry, setRetry] = useState(0);
   const [status, setStatus] = useState('Starting camera…');
   const [error, setError] = useState('');
+  const [frameLoading, setFrameLoading] = useState(false);
+  const [frameError, setFrameError] = useState('');
+  const [frameRetry, setFrameRetry] = useState(0);
   const [detected, setDetected] = useState(false);
   const [fps, setFps] = useState(0);
   const [previewReady, setPreviewReady] = useState(false);
@@ -40,8 +43,8 @@ export const LandmarkGlassesTryOn: React.FC<JeelizGlassesTryOnProps & { onCamera
     rendererRef.current = renderer;
     const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 4000); camera.position.z = 1000;
     const root = new THREE.Group(); root.visible = false; rootRef.current = root; scene.add(root);
-    scene.add(new THREE.HemisphereLight(0xffffff, 0x716a60, 1.2));
-    const key = new THREE.DirectionalLight(0xffffff, 1.5); key.position.set(-100, 200, 600); scene.add(key);
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x716a60, .85));
+    const key = new THREE.DirectionalLight(0xffffff, 1.1); key.position.set(-100, 200, 600); scene.add(key);
     environment = generateStudioEnvironment(renderer, propsRef.current.lightingPreset || 'studio'); scene.environment = environment.texture;
 
     const faceGeometry = new THREE.BufferGeometry();
@@ -200,7 +203,8 @@ export const LandmarkGlassesTryOn: React.FC<JeelizGlassesTryOnProps & { onCamera
     let cancelled = false;
     const root = rootRef.current;
     if (!root) return;
-    loadEyewearCADModel(props.product, props.product.variants[props.variantIndex] || props.product.variants[0]).then(model => {
+    setFrameLoading(true); setFrameError('');
+    loadTryOnFrame(props.product, props.variantIndex).then(model => {
       if (cancelled) {
         model.traverse(object => { if (object instanceof THREE.Mesh) for (const material of Array.isArray(object.material) ? object.material : [object.material]) material.dispose(); });
         return;
@@ -211,9 +215,10 @@ export const LandmarkGlassesTryOn: React.FC<JeelizGlassesTryOnProps & { onCamera
       if (old) { root.remove(old.group); old.dispose(); }
       rigRef.current = rig; root.add(rig.group);
       overlayRef.current?.setAttribute('data-loaded-model', props.product.id);
-    }).catch(e => { if (!cancelled) setError(String(e)); });
+      setFrameLoading(false);
+    }).catch(() => { if (!cancelled) { setFrameLoading(false); setFrameError('This frame could not load. Try again.'); } });
     return () => { cancelled = true; };
-  }, [props.product, props.variantIndex, retry]);
+  }, [props.product, props.variantIndex, retry, frameRetry]);
 
   useEffect(() => {
     const renderer = rendererRef.current, scene = sceneRef.current;
@@ -247,6 +252,8 @@ export const LandmarkGlassesTryOn: React.FC<JeelizGlassesTryOnProps & { onCamera
       }
       className={`absolute inset-0 w-full h-full pointer-events-none ${flip}`}
     />
+    {frameLoading && !error && <div role="status" className="absolute top-16 right-4 z-20 rounded-full bg-black/75 px-3 py-1.5 text-xs text-white">Loading {props.product.name}…</div>}
+    {frameError && !error && <div role="alert" className="absolute top-16 right-4 z-20 rounded-xl bg-black/80 p-3 text-xs text-white">{frameError} <button className="underline" onClick={() => setFrameRetry(value => value + 1)}>Retry frame</button></div>}
     {status && !error && <div className={previewReady ? 'absolute top-4 right-16 z-20 rounded-full bg-black/75 px-3 py-1.5 text-xs text-white' : 'absolute inset-0 z-20 flex items-center justify-center bg-black/70 text-sm text-white'}>{status}</div>}
     {error && <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-4 bg-black/90 p-6 text-white">
       <p className="text-sm text-center" role="alert">{error}</p><button className="rounded-lg bg-white px-4 py-2 text-black" onClick={() => setRetry(value => value + 1)}>Retry camera</button><button className="text-sm underline" onClick={() => props.onSwitchMode?.('photo')}>Use a photo instead</button>
