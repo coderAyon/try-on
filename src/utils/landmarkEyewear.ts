@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { frameFitScale } from '../data/frameFitProfiles';
+import { LensDepthSurface } from './lensDepthSurface';
 
 export interface Landmark { x: number; y: number; z: number }
 export function landmarkWorld(p: Landmark, width: number, height: number): THREE.Vector3 {
@@ -44,9 +45,15 @@ export function eyewearPose(landmarks: Landmark[], width: number, height: number
   // temporary objects to the synchronous camera loop and made lower-end GPUs
   // drop tracking frames during turns.
   const inverseQuaternion = quaternion.clone().invert();
+  const templeProfile = [127, 356].map(i => {
+    const p = world(i).sub(bridge).applyQuaternion(inverseQuaternion).divideScalar(eyeSpan);
+    return { width: THREE.MathUtils.clamp(Math.abs(p.x), .8, 1.5),
+      height: THREE.MathUtils.clamp(p.y, -.4, .15) };
+  });
 
   return {
     position,
+    skinProfile: { left: templeProfile[0], right: templeProfile[1] },
     bridge,
     // Normalized face anatomy, anchored to the nasal saddle rather than screen axes.
     surface: landmarks.slice(0, 468).map((_, i) => world(i).sub(bridge)
@@ -61,6 +68,8 @@ export function eyewearPose(landmarks: Landmark[], width: number, height: number
     scaleHeight: world(10).distanceTo(world(168)),
     scaleFaceWidth: Math.abs(world(234).sub(world(454)).dot(headAxis)),
     scaleAxis: headAxis,
+    // Screen-space cheek span provides a depth-independent size ceiling.
+    screenFaceSpan: world(454).sub(world(234)).setZ(0),
     leftTemple: world(127),
     rightTemple: world(356),
     xAxis,
@@ -72,6 +81,43 @@ export function eyewearPose(landmarks: Landmark[], width: number, height: number
 }
 
 type EyewearPose = NonNullable<ReturnType<typeof eyewearPose>>;
+
+// Bound the rendered front against the face in the same orthographic image.
+// Use the rendered axis (including rotation smoothing), not inferred landmark
+// depth: an inflated z estimate must not allow an oversized visible frame.
+export function faceBoundedScale(pose: EyewearPose, frontWidth: number, scale: number) {
+  const axis = new THREE.Vector2(pose.xAxis.x, pose.xAxis.y);
+  const projection = axis.length();
+  if (!pose.screenFaceSpan || projection < .25 || frontWidth <= 0) return scale;
+  axis.divideScalar(projection);
+  const visibleWidth = Math.abs(pose.screenFaceSpan.x * axis.x + pose.screenFaceSpan.y * axis.y);
+  if (visibleWidth < 8) return scale;
+  return Math.min(scale, visibleWidth * 1.04 / (frontWidth * projection));
+}
+
+// Smooth only the face-width correction, not camera-distance scale. Raw cheek
+// landmarks otherwise bypass StableEyewearPose and resize the frame each tick.
+export class StableFaceScale {
+  private ratio = 1;
+  private time: number | null = null;
+  reset() { this.time = null; this.ratio = 1; }
+  update(pose: EyewearPose, frontWidth: number, scale: number, now: number) {
+    if (scale <= 0) return scale;
+    const projection = Math.hypot(pose.xAxis.x, pose.xAxis.y);
+    // Near profile the projected width is ill-conditioned. Retain the last
+    // reliable proportion; distance scaling continues through `scale`.
+    const target = projection < .3 && this.time !== null
+      ? this.ratio : faceBoundedScale(pose, frontWidth, scale) / scale;
+    if (this.time === null || now - this.time > 250) this.ratio = target;
+    else {
+      const dt = THREE.MathUtils.clamp((now - this.time) / 1000, 1 / 120, .1);
+      const cutoff = Math.abs(target - this.ratio) > .08 ? 6 : 1.5;
+      this.ratio += (target - this.ratio) * (1 - Math.exp(-2 * Math.PI * cutoff * dt));
+    }
+    this.time = now;
+    return scale * this.ratio;
+  }
+}
 // Suppress stationary detector noise, with adaptive response to real movement.
 export class StableEyewearPose {
   private rotation: THREE.Quaternion | null = null;
@@ -97,6 +143,7 @@ export class StableEyewearPose {
   private browRatio: number | undefined;
   private liftRatio = .08;
   private surface: THREE.Vector3[] | null = null;
+  private skinProfile: EyewearPose['skinProfile'] | null = null;
 
   reset() {
     this.rotation = null;
@@ -106,6 +153,7 @@ export class StableEyewearPose {
     this.time = 0;
     this.browRatio = undefined;
     this.surface = null;
+    this.skinProfile = null;
     this.velocity.set(0, 0, 0);
     this.angularDirection.set(0, 0, 0);
     this.coherentAngularSamples = 0;
@@ -125,6 +173,8 @@ export class StableEyewearPose {
     const alpha = (cutoff: number) => 1 - Math.exp(-2 * Math.PI * cutoff * dt);
     const headSpan = pose.scaleSpan && pose.scaleSpan > 8 ? pose.scaleSpan : null;
     const reacquiring = !this.rotation || !this.localAnchor || now - this.time > 250;
+    // Learn temple proportions once per face acquisition, not per noisy turn.
+    if (reacquiring) this.skinProfile = pose.skinProfile ?? null;
     if (reacquiring) this.headToEyeRatio = headSpan ? pose.eyeSpan / headSpan : 1;
     if (reacquiring) this.headToFaceRatio = pose.scaleFaceWidth && pose.scaleFaceWidth > 8
       ? pose.faceWidth / pose.scaleFaceWidth : 1;
@@ -142,6 +192,11 @@ export class StableEyewearPose {
       const yawWeight = Math.sin(angles.y) ** 2 / (Math.sin(angles.y) ** 2 + Math.sin(angles.x) ** 2 + .025);
       const corroborated = THREE.MathUtils.clamp(templeSpan, heightEstimate * .98, heightEstimate * 1.02);
       measuredSpan = THREE.MathUtils.lerp(templeSpan, corroborated, yawWeight);
+      // A nod must not disable the upper bound: inferred temple depth can
+      // inflate during combined pitch/yaw too. Only cap expansion here; do
+      // not force growth from the height estimate. Both spans still follow
+      // real camera-distance changes together.
+      measuredSpan = Math.min(measuredSpan, heightEstimate * 1.02);
     }
     const measuredFaceWidth = pose.scaleFaceWidth && pose.scaleFaceWidth > 8
       ? pose.scaleFaceWidth * this.headToFaceRatio : pose.faceWidth;
@@ -284,6 +339,7 @@ export class StableEyewearPose {
       .applyQuaternion(quaternion).add(bridge);
     return {
       ...pose,
+      skinProfile: this.skinProfile ?? pose.skinProfile,
       bridge,
       surface: this.surface ?? pose.surface,
       position,
@@ -302,6 +358,26 @@ export class StableEyewearPose {
 }
 
 // The back-of-head occluder belongs to the face, independently of frame fitting.
+// Landmarks approximate skin, not its exact depth. Apply a small inward bias
+// only around the temples, in normalized head space, to avoid self-occluding
+// arms resting on that surface. Keep the central face and far-side depth test.
+export function faceOcclusionPoint(point: THREE.Vector3, target: THREE.Vector3, profile?: EyewearPose['skinProfile'], viewDirection?: THREE.Vector3) {
+  const temple = point.x < 0 ? profile?.left : profile?.right;
+  const widthRatio = (temple?.width ?? 1.1) / 1.1;
+  const side = THREE.MathUtils.smoothstep(Math.abs(point.x) / widthRatio, .65, 1.05);
+  const templeBand = 1 - THREE.MathUtils.smoothstep(Math.abs(point.y - (temple?.height ?? -.15)), .2, .55);
+  const inset = .04 * side * templeBand;
+  target.set(point.x - Math.sign(point.x) * inset, point.y, point.z - .008);
+  // Sideways inset alone does not resolve a nod: the camera then looks down
+  // onto the temple. Bias only its visible skin depth along the viewing ray,
+  // leaving screen coordinates and all eyewear transforms unchanged.
+  if (viewDirection && point.x * viewDirection.x >= -.1) {
+    const nod = THREE.MathUtils.smoothstep(Math.abs(viewDirection.y), .15, .65);
+    target.addScaledVector(viewDirection, -.04 * side * templeBand * nod);
+  }
+  return target;
+}
+
 export function faceSkullPose(pose: EyewearPose) {
   const width = pose.leftTemple.distanceTo(pose.rightTemple);
   return {
@@ -387,9 +463,14 @@ export class EyewearRig {
   readonly eyeDistance: number;
   readonly frontWidth: number;
   private fitRatio: number | null = null;
+  private fitTime: number | null = null;
+  private readonly faceScale = new StableFaceScale();
   private lensTop: number | undefined;
   private lensClearanceBounds: THREE.Box3[] | null = null;
   private clearanceRatio = 0;
+  private clearanceTime: number | null = null;
+  private lensDepth: LensDepthSurface | null = null;
+  private templeTime: number | null = null;
   private meshes: RigMesh[] = [];
   private hingeDepth = -.55;
   private tails = [new THREE.Vector3(-4.4, 0, -6), new THREE.Vector3(4.4, 0, -6)];
@@ -460,6 +541,14 @@ export class EyewearRig {
       }
     });
     const lensBounds = left.clone().union(right);
+    // Image-derived frames have a continuous curved front, not named lenses.
+    // Keep that entire surface ahead of the arm deformation/trim boundary.
+    for (const { mesh, source } of this.meshes) {
+      if (mesh.name !== 'custom-frame-front') continue;
+      for (let i = 0; i < source.length; i += 3) {
+        lensBounds.expandByPoint(new THREE.Vector3(source[i], source[i + 1], source[i + 2]));
+      }
+    }
     if (!lensBounds.isEmpty()) this.hingeDepth = Math.min(-.55, lensBounds.min.z - .12);
     const front = new THREE.Box3(), back = [Infinity, Infinity];
     for (const { source } of this.meshes) {
@@ -538,8 +627,23 @@ export class EyewearRig {
     }
     return eyeSpan * Math.max(1 / this.eyeDistance, this.fitRatio * 1.04 / this.frontWidth) * frameFitScale(this.productId);
   }
-  resetFitRatio() { this.fitRatio = null; }
-  fittedPosition(pose: EyewearPose, scale: number) {
+  resetFitRatio() {
+    this.fitRatio = null; this.fitTime = null; this.faceScale.reset(); this.clearanceRatio = 0; this.clearanceTime = null;
+    this.lastLeft = null; this.lastRight = null; this.templeTime = null;
+  }
+  fittedFaceScale(pose: EyewearPose, now?: number) {
+    if (now !== undefined) {
+      if (this.fitTime !== null && now - this.fitTime > 250) this.resetFitRatio();
+      this.fitTime = now;
+    }
+    const scale = this.fittedScale(pose.eyeSpan, pose.faceWidth, pose.isFrontal);
+    return now === undefined ? faceBoundedScale(pose, this.frontWidth, scale)
+      : this.faceScale.update(pose, this.frontWidth, scale, now);
+  }
+  fittedPosition(pose: EyewearPose, scale: number, now?: number) {
+    const dt = now !== undefined && this.clearanceTime !== null
+      ? THREE.MathUtils.clamp((now - this.clearanceTime) / 1000, 1 / 120, .1) : 1 / 30;
+    if (now !== undefined) this.clearanceTime = now;
     const position = pose.position.clone();
     if (this.lensTop === undefined) {
       const bounds = [new THREE.Box3(), new THREE.Box3()];
@@ -550,6 +654,7 @@ export class EyewearRig {
         }
       }
       this.lensClearanceBounds = bounds.filter(box => !box.isEmpty());
+      this.lensDepth = new LensDepthSurface(this.meshes.filter(({ mesh }) => /lens/i.test(mesh.name)).map(({ mesh }) => mesh.geometry));
       this.lensTop = this.lensClearanceBounds.length
         ? Math.max(...this.lensClearanceBounds.map(box => box.max.y)) : 0;
     }
@@ -570,10 +675,11 @@ export class EyewearRig {
         for (const sample of pose.surface) {
           point.copy(sample).multiplyScalar(pose.eyeSpan).sub(localOrigin).divideScalar(scale);
           if (point.x < box.min.x || point.x > box.max.x || point.y < box.min.y || point.y > box.max.y) continue;
-          // The lens's camera-facing surface is max.z. Measuring from min.z
-          // used its back face, so a face correctly behind the lens still
-          // looked like a collision and the glasses stayed buried in the face.
-          clearance = Math.max(clearance, (point.z - box.max.z) * scale + pose.eyeSpan * .012);
+          // Follow the actual curved lens surface and silhouette instead of
+          // treating its entire bounding rectangle as a flat lens.
+          const lensZ = this.lensDepth?.at(point.x, point.y);
+          if (lensZ === null || lensZ === undefined) continue;
+          clearance = Math.max(clearance, (point.z - lensZ) * scale + pose.eyeSpan * .012);
         }
       }
       // Never move the bridge away from its nasal seat to clear a cheek estimate.
@@ -581,18 +687,25 @@ export class EyewearRig {
       const ratio = Math.min(Math.max(0, clearance) / pose.eyeSpan, .06);
       // Move immediately when skin would occlude the lens; release gradually
       // to keep the glasses face-locked as the cheek contour changes in 3D.
-      this.clearanceRatio = THREE.MathUtils.lerp(this.clearanceRatio, ratio, ratio > this.clearanceRatio ? .12 : .035);
+      this.clearanceRatio = ratio > this.clearanceRatio
+        ? ratio : THREE.MathUtils.lerp(this.clearanceRatio, ratio, 1 - Math.pow(.965, dt * 30));
       position.addScaledVector(pose.zAxis, this.clearanceRatio * pose.eyeSpan);
     }
     return position;
   }
-  fitTemples(leftEar: THREE.Vector3, rightEar: THREE.Vector3) {
+  fitTemples(leftEar: THREE.Vector3, rightEar: THREE.Vector3, now?: number) {
+    const dt = now !== undefined && this.templeTime !== null
+      ? THREE.MathUtils.clamp((now - this.templeTime) / 1000, 1 / 120, .1) : 1 / 30;
+    if (now !== undefined) this.templeTime = now;
     // These are head-local proportions, not screen positions. Reuse the fitted
     // geometry while they remain within roughly a pixel to avoid heavy uploads.
     if (this.lastLeft && this.lastRight && this.lastLeft.distanceTo(leftEar) < .04 && this.lastRight.distanceTo(rightEar) < .04) return;
     // Filter only head-local arm proportions; the shared head pose stays intact.
     if (!this.lastLeft || !this.lastRight) { this.lastLeft = leftEar.clone(); this.lastRight = rightEar.clone(); }
-    else { this.lastLeft.lerp(leftEar, .18); this.lastRight.lerp(rightEar, .18); }
+    else {
+      const response = 1 - Math.exp(-2 * Math.PI * .95 * dt);
+      this.lastLeft.lerp(leftEar, response); this.lastRight.lerp(rightEar, response);
+    }
     const hingeDepth = this.hingeDepth;
     for (const { mesh, source } of this.meshes) {
       const positions = mesh.geometry.getAttribute('position') as THREE.BufferAttribute;
@@ -602,15 +715,13 @@ export class EyewearRig {
         const ear = x < 0 ? this.lastLeft : this.lastRight;
         const tail = this.tails[x < 0 ? 0 : 1];
         const t = THREE.MathUtils.clamp((hingeDepth - z) / Math.max(.5, hingeDepth - tail.z), 0, 1.5);
-        const targetZ = Math.min(hingeDepth - 0.2, ear.z - 0.35);
+        // End at the measured head, without an extra fixed-length extension.
+        // Use model-relative dimensions so imported geometry shares the fit.
+        const targetZ = Math.min(hingeDepth - this.frontWidth * .02, ear.z);
         let fittedX = x + (ear.x - tail.x) * t;
-        if (this.productId === 'imported-vuzix') {
-          // The electronics housing is wider than a normal temple. Keep its
-          // AR copy inside the hinge-to-temple contour instead of jutting out.
-          const progress = THREE.MathUtils.clamp(t, 0, 1);
-          const contour = THREE.MathUtils.lerp(this.frontWidth / 2, Math.abs(ear.x), progress) + .06;
-          fittedX = Math.sign(x) * Math.min(Math.abs(fittedX), contour);
-        }
+        const progress = THREE.MathUtils.clamp(t, 0, 1);
+        const contour = THREE.MathUtils.lerp(this.frontWidth / 2, Math.abs(ear.x), progress) + this.frontWidth * .007;
+        fittedX = Math.sign(x) * Math.min(Math.abs(fittedX), contour);
         positions.setXYZ(i,
           fittedX,
           y + (ear.y - tail.y) * t,

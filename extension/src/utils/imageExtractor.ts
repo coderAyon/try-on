@@ -124,6 +124,13 @@ function upgradeImageUrlResolution(rawUrl: string): string {
  * Extracts high-res product image URL from any HTML Element
  */
 export function extractHighResImageUrl(element: HTMLElement): string {
+  const raw = extractRawImageUrl(element);
+  if (!raw) return '';
+  try { return new URL(raw, element.ownerDocument.baseURI).href; }
+  catch { return ''; }
+}
+
+function extractRawImageUrl(element: HTMLElement): string {
   // 1. Amazon dynamic JSON
   const amazonUrl = extractFromAmazonDynamicJson(element);
   if (amazonUrl) return upgradeImageUrlResolution(amazonUrl);
@@ -144,7 +151,7 @@ export function extractHighResImageUrl(element: HTMLElement): string {
 
   for (const attr of dataAttributes) {
     const val = element.getAttribute(attr);
-    if (val && val.startsWith('http')) {
+    if (val && val.trim()) {
       return upgradeImageUrlResolution(val);
     }
   }

@@ -9,7 +9,7 @@ const puppeteer = require('puppeteer'), fs = require('fs');
     const result = await page.evaluate(async () => {
       const THREE = await import('/node_modules/.vite/deps/three.js');
       const { FaceLandmarker, FilesetResolver } = await import('/node_modules/.vite/deps/@mediapipe_tasks-vision.js');
-      const { EyewearRig, eyewearPose, landmarkWorld, faceSkullPose } = await import('/src/utils/landmarkEyewear.ts');
+      const { EyewearRig, eyewearPose, landmarkWorld, faceSkullPose, faceOcclusionPoint } = await import('/src/utils/landmarkEyewear.ts');
       const { frameFitScale } = await import('/src/data/frameFitProfiles.ts');
       const { loadEyewearCADModel } = await import('/src/utils/cadModelManager.ts');
       const { SUNGLASSES_CATALOG } = await import('/src/data/catalog.ts');
@@ -23,7 +23,7 @@ const puppeteer = require('puppeteer'), fs = require('fs');
       renderer.setSize(300, 300); renderer.setClearColor(0x202730); renderer.outputColorSpace = THREE.SRGBColorSpace; renderer.toneMapping = THREE.ACESFilmicToneMapping;
       const env = generateStudioEnvironment(renderer, 'studio');
       const camera = new THREE.OrthographicCamera(-150, 150, 150, -150, .1, 4000); camera.position.z = 1000;
-      const poses = [['front', 0, 0, 0], ['left40', 0, -40, 0], ['right40', 0, 40, 0], ['down30', 30, 0, 0], ['up30', -30, 0, 0], ['roll25', 0, 0, 25]];
+      const poses = [['front', 0, 0, 0], ['left40', 0, -40, 0], ['right40', 0, 40, 0], ['down30', 30, 0, 0], ['up30', -30, 0, 0], ['roll25', 0, 0, 25], ['left-down', 25, -50, 10], ['right-down', 25, 50, -10]];
       const panels = [], checks = [], issues = [];
       for (const face of ['male_square', 'female_oval']) {
         const image = new Image(); image.src = '/models_faces/' + face + '.jpg'; await image.decode();
@@ -66,21 +66,31 @@ const puppeteer = require('puppeteer'), fs = require('fs');
             const pose = eyewearPose(moved.map(p => ({ x: p.x / sw + .5, y: .5 - p.y / sh, z: -p.z / sw })), sw, sh);
             const expected = rotation.clone().multiply(base.quaternion);
             if (pose.quaternion.angleTo(expected) > 1e-5) throw Error('Pose mismatch: ' + product.id);
-            const scale = rig.fittedScale(pose.eyeSpan, pose.faceWidth);
+            const scale = rig.fittedFaceScale(pose);
             root.position.copy(rig.fittedPosition(pose, scale)); root.quaternion.copy(pose.quaternion); root.scale.setScalar(scale); root.updateMatrixWorld(true);
-            if (rig.frontWidth * root.scale.x < pose.faceWidth * 1.04 * frameFitScale(product.id) - .01) throw Error('Frame undersized for its profile: ' + product.id);
+            const axis = new THREE.Vector2(pose.xAxis.x, pose.xAxis.y);
+            const projection = axis.length(); axis.normalize();
+            const visibleFace = Math.abs(pose.screenFaceSpan.x * axis.x + pose.screenFaceSpan.y * axis.y);
+            if (!Number.isFinite(scale) || scale <= 0) throw Error('Invalid fitted scale: ' + product.id);
+            if (projection >= .25 && rig.frontWidth * scale * projection > visibleFace * 1.04 + .01) throw Error('Frame exceeds face width: ' + product.id);
             const left = root.worldToLocal(pose.leftTemple.clone()), right = root.worldToLocal(pose.rightTemple.clone());
             rig.fitTemples(left, right);
             const fittedLens = new THREE.Box3(); rig.group.traverse(m => { if (m.isMesh && /lens/i.test(m.name)) { m.geometry.computeBoundingBox(); fittedLens.union(m.geometry.boundingBox); } });
             if (!lens.isEmpty() && (!fittedLens.min.equals(lens.min) || !fittedLens.max.equals(lens.max))) throw Error('Temple fitting deformed lens: ' + product.id);
             const skullPose = faceSkullPose(pose); skull.position.copy(skullPose.position); skull.quaternion.copy(skullPose.quaternion); skull.scale.copy(skullPose.scale);
-            const positions = surface.getAttribute('position'); moved.slice(0, 468).forEach((p, i) => positions.setXYZ(i, p.x, p.y, p.z - pose.eyeSpan * .008)); positions.needsUpdate = true;
+            const positions = surface.getAttribute('position');
+            const occlusionView = new THREE.Vector3(0,0,1).applyQuaternion(pose.quaternion.clone().invert());
+            pose.surface.forEach((p, i) => {
+              const masked = faceOcclusionPoint(p, new THREE.Vector3(), pose.skinProfile, occlusionView).multiplyScalar(pose.eyeSpan).applyQuaternion(pose.quaternion).add(pose.bridge);
+              positions.setXYZ(i, masked.x, masked.y, masked.z);
+            });
+            positions.needsUpdate = true;
             const viewCentre = moved[10].clone().add(moved[152]).multiplyScalar(.5);
             camera.position.x = viewCentre.x; camera.position.y = viewCentre.y;
             renderer.render(scene, camera);
             panels.push({ face, id: product.id, name: product.name, pose: label, data: renderer.domElement.toDataURL() });
           }
-          checks.push({ face, id: product.id, frontWidth: rig.frontWidth, eyeDistance: rig.eyeDistance, lensCentre: centre, gapRatio, poses: 6 });
+          checks.push({ face, id: product.id, frontWidth: rig.frontWidth, eyeDistance: rig.eyeDistance, lensCentre: centre, gapRatio, poses: poses.length });
           rig.dispose(); skull.geometry.dispose(); skull.material.dispose();
         }
         surface.dispose(); skinMat.dispose(); texture.dispose();

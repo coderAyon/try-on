@@ -73,3 +73,380 @@
     filter: drop-shadow(0 0 6px rgba(192, 132, 252, 0.8));
   }
 }
+
+/* ==========================================================================
+   Lumen Floating In-Page AR Video Mirror
+   ========================================================================== */
+
+.lumen-mirror-box {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  width: 340px;
+  border-radius: 20px;
+  background: rgba(14, 11, 28, 0.94);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(168, 85, 247, 0.45);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.75), 0 0 24px rgba(139, 92, 246, 0.3);
+  z-index: 2147483647;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  display: flex;
+  flex-direction: column;
+  opacity: 0;
+  transform: translateY(20px) scale(0.95);
+  pointer-events: none;
+  transition: opacity 0.28s cubic-bezier(0.16, 1, 0.3, 1), transform 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.lumen-mirror-box * {
+  box-sizing: border-box;
+}
+
+.lumen-mirror-box.lumen-mirror-visible {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  pointer-events: auto;
+}
+
+/* Header & Drag Handle */
+.lumen-mirror-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  cursor: grab;
+  user-select: none;
+}
+
+.lumen-mirror-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.lumen-mirror-logo {
+  font-size: 16px;
+}
+
+.lumen-mirror-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #ffffff;
+  letter-spacing: 0.02em;
+}
+
+.lumen-live-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #10b981;
+  box-shadow: 0 0 8px #10b981;
+  animation: lumen-live-pulse 1.8s infinite;
+}
+
+.lumen-face-lock-badge {
+  font-size: 10px;
+  font-weight: 600;
+  color: #34d399;
+  background: rgba(16, 185, 129, 0.15);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  padding: 1px 6px;
+  border-radius: 9999px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+@keyframes lumen-live-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.85); }
+}
+
+.lumen-mirror-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.lumen-btn-studio {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: linear-gradient(135deg, rgba(147, 51, 234, 0.45), rgba(79, 70, 229, 0.45));
+  border: 1px solid rgba(168, 85, 247, 0.5);
+  color: #f3e8ff;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.18s ease;
+  white-space: nowrap;
+  letter-spacing: 0.02em;
+}
+
+.lumen-btn-studio:hover {
+  background: linear-gradient(135deg, rgba(147, 51, 234, 0.8), rgba(79, 70, 229, 0.8));
+  color: #ffffff;
+  border-color: rgba(192, 132, 252, 0.9);
+  box-shadow: 0 0 12px rgba(168, 85, 247, 0.5);
+  transform: translateY(-1px);
+}
+
+.lumen-btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #cbd5e1;
+  font-size: 12px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.lumen-btn-icon:hover {
+  background: rgba(255, 255, 255, 0.2);
+  color: #ffffff;
+}
+
+.lumen-btn-close:hover {
+  background: rgba(239, 68, 68, 0.8);
+  border-color: #ef4444;
+  color: #ffffff;
+}
+
+/* Active Frame Meta Banner */
+.lumen-mirror-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 6px 14px;
+  background: rgba(168, 85, 247, 0.1);
+  border-bottom: 1px solid rgba(168, 85, 247, 0.18);
+}
+
+.lumen-meta-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #f3e8ff;
+  max-width: 220px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lumen-meta-brand {
+  font-size: 10px;
+  font-weight: 600;
+  color: #c084fc;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* Viewport Area */
+.lumen-mirror-viewport {
+  position: relative;
+  width: 100%;
+  height: 255px;
+  background: #000000;
+  overflow: hidden;
+}
+
+#lumen-mirror-video {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  opacity: 0.001;
+  pointer-events: none;
+  z-index: -1;
+}
+
+#lumen-mirror-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* Shutter flash */
+.lumen-mirror-flash {
+  position: absolute;
+  inset: 0;
+  background: #ffffff;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.22s ease;
+  z-index: 10;
+}
+
+.lumen-mirror-flash.lumen-flashing {
+  opacity: 0.9;
+}
+
+/* Status loading overlay */
+.lumen-mirror-status {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: rgba(12, 10, 24, 0.92);
+  z-index: 5;
+  color: #e2e8f0;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.lumen-status-spinner {
+  width: 26px;
+  height: 26px;
+  border: 3px solid rgba(168, 85, 247, 0.2);
+  border-top-color: #c084fc;
+  border-radius: 50%;
+  animation: lumen-spin 0.75s linear infinite;
+}
+
+@keyframes lumen-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Controls Toolbar */
+.lumen-mirror-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: rgba(20, 16, 40, 0.98);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 11px;
+}
+
+.lumen-ctrl-group {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.lumen-ctrl-label {
+  color: #94a3b8;
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.lumen-ctrl-val {
+  color: #e2e8f0;
+  font-size: 10px;
+  font-weight: 600;
+  min-width: 32px;
+  text-align: center;
+}
+
+.lumen-ctrl-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #e2e8f0;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.lumen-ctrl-btn:hover {
+  background: rgba(168, 85, 247, 0.35);
+  border-color: rgba(192, 132, 252, 0.5);
+  color: #ffffff;
+}
+
+.lumen-snap-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 9999px;
+  background: linear-gradient(135deg, #a855f7, #6366f1);
+  color: #ffffff;
+  font-weight: 600;
+  font-size: 11px;
+  border: none;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(168, 85, 247, 0.4);
+  transition: all 0.15s ease;
+}
+
+.lumen-snap-btn:hover {
+  filter: brightness(1.15);
+  transform: translateY(-1px);
+}
+
+.lumen-snap-btn:active {
+  transform: translateY(0);
+}
+
+/* Minimized Floating Pill State */
+.lumen-minimized-pill {
+  display: none;
+}
+
+.lumen-mirror-box.lumen-minimized {
+  width: auto;
+  border-radius: 9999px;
+  background: rgba(18, 14, 34, 0.95);
+  border: 1px solid rgba(168, 85, 247, 0.6);
+  box-shadow: 0 8px 30px rgba(109, 40, 217, 0.4);
+}
+
+.lumen-mirror-box.lumen-minimized .lumen-mirror-header,
+.lumen-mirror-box.lumen-minimized .lumen-mirror-meta,
+.lumen-mirror-box.lumen-minimized .lumen-mirror-viewport,
+.lumen-mirror-box.lumen-minimized .lumen-mirror-controls {
+  display: none;
+}
+
+.lumen-mirror-box.lumen-minimized .lumen-minimized-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.lumen-pill-icon {
+  font-size: 15px;
+}
+
+.lumen-pill-text {
+  font-size: 12px;
+  font-weight: 600;
+  color: #f3e8ff;
+  max-width: 180px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lumen-pill-expand {
+  font-size: 11px;
+  color: #34d399;
+  font-weight: 500;
+}
+

@@ -34,7 +34,18 @@ assert.equal(trimmedBox.max.x, sourceBox.max.x, 'Front width changed');
 rig.fitTemples(new THREE.Vector3(-4.4, 0, -4), new THREE.Vector3(4.4, 0, -4));
 for (const mesh of rig.group.children as THREE.Mesh[]) {
   const p = mesh.geometry.getAttribute('position');
-  for (let i = 0; i < p.count; i++) assert(Number.isFinite(p.getZ(i)));
+  for (let i = 0; i < p.count; i++) {
+    assert(Number.isFinite(p.getZ(i)));
+  }
 }
+const aviator = new EyewearRig(model, 'rayban-aviator-classic');
+aviator.fitTemples(new THREE.Vector3(-4.4, 0, -4), new THREE.Vector3(4.4, 0, -4));
+const aviatorFront = aviator.group.children.find(mesh => mesh.name === 'front') as THREE.Mesh;
+assert.deepEqual(Array.from(aviatorFront.geometry.getAttribute('position').array), Array.from(frontCopy.geometry.getAttribute('position').array), 'Aviator front changed');
+const normalDepth = new THREE.Box3().setFromObject(rig.group, true).min.z;
+const shortenedDepth = new THREE.Box3().setFromObject(aviator.group, true).min.z;
+assert.equal(shortenedDepth, normalDepth, 'Product ID changed anatomical arm fitting');
+assert(normalDepth >= -4.001, 'Arms extend beyond the measured temple');
+aviator.dispose();
 rig.dispose();
 console.log('Temple trim checks passed: hook removed, front/source unchanged, crossing triangles and UV/material groups preserved, fitted vertices finite.');

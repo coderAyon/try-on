@@ -34,7 +34,9 @@ export type ExtensionMessageType =
   | 'GET_HISTORY'
   | 'ADD_HISTORY'
   | 'CLEAR_HISTORY'
-  | 'CHECK_STATUS';
+  | 'CHECK_STATUS'
+  | 'FETCH_IMAGE_DATA_URL'
+  | 'SHOW_INPAGE_MIRROR';
 
 export interface ExtensionMessage {
   type: ExtensionMessageType;

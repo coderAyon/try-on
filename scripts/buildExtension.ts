@@ -16,12 +16,28 @@ async function buildAll() {
   }
   fs.mkdirSync(outDir, { recursive: true });
 
+  // The tracker document owns its WASM execution; shop pages never load scripts.
+  await build({
+    configFile: false,
+    root: path.resolve(extDir, 'src/tracker'),
+    base: './',
+    build: { outDir: path.resolve(outDir, 'tracker'), emptyOutDir: true },
+  });
+  fs.cpSync(path.resolve(rootDir, 'public/tracking/wasm'), path.resolve(outDir, 'tracking/wasm'), { recursive: true });
+  fs.copyFileSync(path.resolve(rootDir, 'public/tracking/face_landmarker.task'), path.resolve(outDir, 'tracking/face_landmarker.task'));
+  for (const file of ['LICENSE.txt', 'SOURCE.md']) {
+    fs.copyFileSync(path.resolve(rootDir, 'public/tracking', file), path.resolve(outDir, 'tracking', file));
+  }
+
   // 1. Build Popup (React App)
   console.log('📦 Building Popup UI...');
   await build({
     root: path.resolve(extDir, 'src/popup'),
     plugins: [react()],
     base: './',
+    css: {
+      postcss: path.resolve(rootDir, 'postcss.config.js'),
+    },
     build: {
       outDir: path.resolve(outDir, 'popup'),
       emptyOutDir: true,

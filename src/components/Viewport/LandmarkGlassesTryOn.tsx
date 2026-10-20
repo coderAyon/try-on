@@ -4,7 +4,7 @@ import { FaceLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
 import { FaceMeasurementSampler } from '../../utils/faceFitAdvisor';
 import type { JeelizGlassesTryOnProps } from './JeelizGlassesTryOn';
 import { loadTryOnFrame } from '../../utils/tryOnFrame';
-import { EyewearRig, eyewearPose, landmarkWorld, StableEyewearPose, faceSkullPose } from '../../utils/landmarkEyewear';
+import { EyewearRig, eyewearPose, landmarkWorld, StableEyewearPose, faceSkullPose, faceOcclusionPoint } from '../../utils/landmarkEyewear';
 import { generateStudioEnvironment } from '../../utils/environmentGenerator';
 import { openTryOnCamera, cameraErrorMessage } from '../../utils/cameraAccess';
 import { createFaceDetector, sanitizeEmscriptenEnvironment } from '../../utils/faceDetector';
@@ -70,6 +70,7 @@ export const LandmarkGlassesTryOn: React.FC<JeelizGlassesTryOnProps & { onCamera
     const measurementSampler = new FaceMeasurementSampler();
     const poseStabilizer = new StableEyewearPose();
     const facePoint = new THREE.Vector3();
+    const occlusionView = new THREE.Vector3();
     const faceTransform = new THREE.Matrix4();
     const faceScale = new THREE.Vector3();
     const processFrame = () => {
@@ -92,14 +93,15 @@ export const LandmarkGlassesTryOn: React.FC<JeelizGlassesTryOnProps & { onCamera
         const fit = propsRef.current.calibration;
         if (pose && rig) {
           lostFrames = 0; lastGoodPoseAt = now;
-          const scale = rig.fittedScale(pose.eyeSpan, pose.faceWidth, pose.isFrontal) * (fit?.scale ?? 1) * (63 + (fit?.ipdOffsetMm ?? 0)) / 63;
-          root.position.copy(rig.fittedPosition(pose, scale));
+          const scale = rig.fittedFaceScale(pose, now)
+            * (fit?.scale ?? 1) * (63 + (fit?.ipdOffsetMm ?? 0)) / 63;
+          root.position.copy(rig.fittedPosition(pose, scale, now));
           root.position.addScaledVector(pose.yAxis, (fit?.verticalOffsetMm ?? 0) * pose.eyeSpan / 63);
           root.position.addScaledVector(pose.zAxis, (fit?.depthOffsetMm ?? 0) * pose.eyeSpan / 63);
           root.quaternion.copy(pose.quaternion); root.scale.setScalar(scale); root.updateMatrixWorld(true);
           const leftEar = root.worldToLocal(pose.leftTemple.clone());
           const rightEar = root.worldToLocal(pose.rightTemple.clone());
-          rig.fitTemples(leftEar, rightEar);
+          rig.fitTemples(leftEar, rightEar, now);
           // A measured face surface hides the far branch. A skull volume fills
           // the open back of the face mesh, including the forehead/hair region.
           const faceWidth = leftEar.distanceTo(rightEar);
@@ -109,9 +111,10 @@ export const LandmarkGlassesTryOn: React.FC<JeelizGlassesTryOnProps & { onCamera
           root.visible = true; faceMask.visible = true;
           const positions = faceGeometry.getAttribute('position') as THREE.BufferAttribute;
           faceTransform.compose(pose.bridge, pose.quaternion, faceScale.setScalar(pose.eyeSpan));
+          occlusionView.set(0, 0, 1).applyQuaternion(pose.quaternion.clone().invert());
           for (let i = 0; i < 468; i++) {
             const p = pose.surface[i];
-            facePoint.set(p.x, p.y, p.z - .008).applyMatrix4(faceTransform);
+            faceOcclusionPoint(p, facePoint, pose.skinProfile, occlusionView).applyMatrix4(faceTransform);
             positions.setXYZ(i, facePoint.x, facePoint.y, facePoint.z);
           }
           positions.needsUpdate = true;

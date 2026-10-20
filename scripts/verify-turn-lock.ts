@@ -48,5 +48,21 @@ for (const fps of [20,30,60]) {
     const fit=nod.update(sample(0,.5*Math.sin(i/fps*2)),i*1000/fps);
     assert(Math.abs(fit.eyeSpan/first.eyeSpan-1)<1e-9,'Rigid nod changed frame size');
   }
-  console.log(`PASS ${fps} FPS: max yaw growth ${(maxGrowth*100).toFixed(2)}%; fixed nasal seat; return, profile zoom, nod`);
+  // Depth inference can inflate temple width during a nod, including while
+  // holding the tilted pose. Rotational damping alone only delays the growth.
+  for (const yaw of [0, .6, -.6]) {
+    const tilted = new StableEyewearPose();
+    tilted.update(sample(0, 0), 0);
+    for (let i = 1; i <= fps * 4; i++) {
+      const progress = Math.min(1, i / fps);
+      const fit = tilted.update(sample(yaw * progress, .65 * progress, 1, .3 * progress), i * 1000 / fps);
+      assert(fit.eyeSpan <= first.eyeSpan * 1.021, 'Nod/turn depth error enlarged the frame');
+    }
+    // Moving closer while tilted must still increase the frame with the face.
+    for (let i = 1; i <= fps * 2; i++) {
+      const fit = tilted.update(sample(yaw, .65, 1.3, .3), 4000 + i * 1000 / fps);
+      if (i === fps * 2) assert(Math.abs(fit.eyeSpan / (first.eyeSpan * 1.3) - 1) < .025, 'Tilted zoom was frozen');
+    }
+  }
+  console.log(`PASS ${fps} FPS: max yaw growth ${(maxGrowth*100).toFixed(2)}%; fixed nasal seat; return, profile zoom, nod, inflated nod/turn, tilted zoom`);
 }

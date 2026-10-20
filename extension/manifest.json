@@ -2,6 +2,13 @@
   "manifest_version": 3,
   "name": "Lumen Anywhere - Virtual Sunglasses Try-On",
   "version": "1.0.0",
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  },
+  "web_accessible_resources": [{
+    "resources": ["dist/tracker/index.html"],
+    "matches": ["<all_urls>"]
+  }],
   "description": "Click any sunglasses on Amazon, Ray-Ban, Prada, or any website and virtually try them on in real-time 3D AR face tracking.",
   "permissions": [
     "activeTab",

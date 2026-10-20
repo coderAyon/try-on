@@ -2,6 +2,14 @@
 
 Virtual sunglasses try-on browser extension for **Microsoft Edge** and **Google Chrome**.
 
+After rebuilding with `npm run build:extension`, reload the extension on
+`edge://extensions` or `chrome://extensions`, then refresh the shopping tab.
+The in-page mirror uses bundled MediaPipe iris landmarks and keeps camera frames
+inside the browser. Use a front-facing product photo: angled product shots cannot
+be fully corrected by a 2D overlay. Size, Nose, and drag controls allow fine tuning.
+Run `node scripts/verify-extension-mirror.cjs` to check the unpacked extension,
+local WASM loading, eye fitting, face loss, and reflection cleanup in Chrome.
+
 Browse any e-commerce or fashion website (Amazon, Ray-Ban, Prada, Oakley, etc.), hover over any sunglasses image, click **"Try This Frame"**, and instantly try it on your face using real-time 3D AR face tracking with realistic depth occlusion!
 
 ---

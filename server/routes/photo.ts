@@ -267,19 +267,21 @@ router.post('/normalize-frame', async (req, res) => {
     if (req.body?.useAI) {
       try {
         const token = process.env.HF_SPACE_TOKEN?.trim() || process.env.HF_TOKEN?.trim();
-        // Allow ZeroGPU up to 25 seconds to allocate and run inference
-        const zeroGpuPromise = removeFrameBackgroundWithZeroGpu(bytes, token);
-        const timeoutPromise = new Promise<Buffer>((_, reject) =>
-          setTimeout(() => reject(new Error('ZeroGPU connection timeout')), 25000)
-        );
-        const processed = await Promise.race([zeroGpuPromise, timeoutPromise]);
-        const straightened = await processAndStraightenFrame(processed);
-        res.json({
-          image: `data:image/png;base64,${straightened.toString('base64')}`,
-          model: 'briaai/BRIA-RMBG-2.0',
-          provider: 'Hugging Face ZeroGPU · Bria',
-        });
-        return;
+        if (token) {
+          // Allow ZeroGPU up to 25 seconds to allocate and run inference
+          const zeroGpuPromise = removeFrameBackgroundWithZeroGpu(bytes, token);
+          const timeoutPromise = new Promise<Buffer>((_, reject) =>
+            setTimeout(() => reject(new Error('ZeroGPU connection timeout')), 25000)
+          );
+          const processed = await Promise.race([zeroGpuPromise, timeoutPromise]);
+          const straightened = await processAndStraightenFrame(processed);
+          res.json({
+            image: `data:image/png;base64,${straightened.toString('base64')}`,
+            model: 'briaai/BRIA-RMBG-2.0',
+            provider: 'Hugging Face ZeroGPU · Bria',
+          });
+          return;
+        }
       } catch (aiErr) {
         console.warn('Hosted ZeroGPU background removal timed out or failed, seamlessly using local computer vision engine:', aiErr);
       }

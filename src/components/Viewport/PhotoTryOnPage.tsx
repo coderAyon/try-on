@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { createFaceDetector } from '../../utils/faceDetector';
 import { detectPhotoFaces } from '../../utils/photoFaceDetection';
 import { loadEyewearCADModel } from '../../utils/cadModelManager';
-import { EyewearRig, eyewearPose, landmarkWorld, faceSkullPose } from '../../utils/landmarkEyewear';
+import { EyewearRig, eyewearPose, landmarkWorld, faceSkullPose, faceOcclusionPoint } from '../../utils/landmarkEyewear';
 import { generateStudioEnvironment } from '../../utils/environmentGenerator';
 import { SunglassesProduct } from '../../types';
 import { ProductThumbnail } from '../Catalog/ProductThumbnail';
@@ -1374,7 +1374,7 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
       // 8. Eyewear Group & Temple Arm Fitting
       const root = new THREE.Group();
       root.add(rig.group);
-      const fittedScale = rig.fittedScale(pose.eyeSpan, pose.faceWidth, pose.isFrontal);
+      const fittedScale = rig.fittedFaceScale(pose);
       root.position.copy(rig.fittedPosition(pose, fittedScale));
       root.quaternion.copy(pose.quaternion);
       root.scale.setScalar(fittedScale);
@@ -1407,12 +1407,13 @@ export function PhotoTryOnPage({ products, product, onSelect, onBack }: PhotoTry
 
       geometry = new THREE.BufferGeometry();
       geometry.setIndex(triangles);
+      const occlusionView = new THREE.Vector3(0, 0, 1).applyQuaternion(pose.quaternion.clone().invert());
       geometry.setAttribute(
         'position',
         new THREE.Float32BufferAttribute(
-          points.slice(0, 468).flatMap((p) => {
-            const w = landmarkWorld(p, width, height);
-            w.addScaledVector(pose.zAxis, -pose.eyeSpan * .008);
+          pose.surface.flatMap((p) => {
+            const w = faceOcclusionPoint(p, new THREE.Vector3(), pose.skinProfile, occlusionView).multiplyScalar(pose.eyeSpan)
+              .applyQuaternion(pose.quaternion).add(pose.bridge);
             return w.toArray();
           }),
           3

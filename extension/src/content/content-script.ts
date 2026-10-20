@@ -1,6 +1,7 @@
-import { detectSunglassesImage, DetectionResult } from '../utils/sunglassesDetector';
+import { detectSunglassesImage } from '../utils/sunglassesDetector';
 import { getSettings } from '../utils/storage';
 import { ExtensionSettings } from '../types';
+import { inPageMirror } from './inPageMirror';
 
 let currentSettings: ExtensionSettings | null = null;
 const processedElements = new WeakSet<HTMLElement>();
@@ -61,41 +62,72 @@ function positionBadge(badge: HTMLElement, target: HTMLElement) {
 /**
  * Attaches hover listeners to a verified sunglasses element
  */
-function attachHoverTrigger(element: HTMLElement, detection: DetectionResult) {
+function attachHoverTrigger(element: HTMLElement) {
   const badge = activeBadge || (activeBadge = createFloatingBadge());
 
   const show = () => {
     if (!currentSettings?.enabled || !currentSettings?.showFloatingBadge) return;
+    if (!detectSunglassesImage(element).isSunglasses) return;
     window.clearTimeout(hideBadgeTimeout);
     positionBadge(badge, element);
     badge.classList.add('lumen-visible');
 
-    // Attach click handler with current detection payload
-    badge.onclick = (e) => {
+    // Attach click handler: opens in-page video mirror right on the page (no website redirect)
+    badge.onclick = async (e) => {
       e.preventDefault();
       e.stopPropagation();
 
       const textEl = badge.querySelector('.lumen-text');
-      if (textEl) textEl.textContent = 'Opening AR…';
+      try {
+        const detection = detectSunglassesImage(element);
+        if (!detection.isSunglasses || !detection.highResUrl) {
+          badge.classList.remove('lumen-visible');
+          return;
+        }
 
-      // Send to background service worker
-      if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
-        chrome.runtime.sendMessage({
-          type: 'OPEN_TRYON',
-          payload: {
-            frame: detection.highResUrl,
-            title: detection.title,
-            brand: detection.brand,
-            price: detection.price,
-            domain: window.location.hostname,
-          },
+        if (textEl) textEl.textContent = 'Fitting Mirror…';
+        console.log('[Lumen Anywhere] Opening in-page mirror for frame:', detection.title || detection.highResUrl);
+
+        // Save to recent try-on history safely
+        try {
+          if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
+            chrome.runtime.sendMessage({
+              type: 'ADD_HISTORY',
+              payload: {
+                id: `hist-${Date.now()}`,
+                frame: detection.highResUrl,
+                imageUrl: detection.highResUrl,
+                title: detection.title || 'Online Sunglasses',
+                brand: detection.brand || 'Web Store',
+                domain: window.location.hostname,
+                timestamp: Date.now(),
+              },
+            }, () => {
+              if (chrome.runtime?.lastError) { /* ignore */ }
+            });
+          }
+        } catch {
+          // Extension context was invalidated on reload; safely proceed with in-page mirror
+        }
+
+        // Launch in-page floating live video mirror directly on the shopping page
+        await inPageMirror.open({
+          frame: detection.highResUrl,
+          title: detection.title,
+          brand: detection.brand,
+          price: detection.price,
+          domain: window.location.hostname,
         });
+      } catch (err: any) {
+        if (!err?.message?.includes?.('Extension context invalidated')) {
+          console.warn('[Lumen Anywhere] In-page mirror note:', err);
+        }
+      } finally {
+        setTimeout(() => {
+          if (textEl) textEl.textContent = 'Try This Frame';
+          badge.classList.remove('lumen-visible');
+        }, 1200);
       }
-
-      setTimeout(() => {
-        if (textEl) textEl.textContent = 'Try This Frame';
-        badge.classList.remove('lumen-visible');
-      }, 1500);
     };
   };
 
@@ -130,18 +162,8 @@ function scanPageImages() {
     if (processedElements.has(element)) return;
     processedElements.add(element);
 
-    const checkAndAttach = () => {
-      const detection = detectSunglassesImage(element);
-      if (detection.isSunglasses) {
-        attachHoverTrigger(element, detection);
-      }
-    };
-
-    if (element instanceof HTMLImageElement && !element.complete) {
-      element.addEventListener('load', checkAndAttach, { once: true });
-    } else {
-      checkAndAttach();
-    }
+    // Read detection on hover/click: galleries reuse images and replace URLs.
+    attachHoverTrigger(element);
   });
 }
 
@@ -151,7 +173,7 @@ function scanPageImages() {
 async function init() {
   currentSettings = await getSettings();
 
-  if (currentSettings.enabled) {
+  {
     scanPageImages();
 
     // Debounced mutation observer to scan lazy-loaded elements on scroll
@@ -174,6 +196,10 @@ async function init() {
         } else if (currentSettings?.enabled) {
           scanPageImages();
         }
+      }
+
+      if (message.type === 'SHOW_INPAGE_MIRROR' && message.payload?.frame) {
+        inPageMirror.open(message.payload);
       }
     });
   }
