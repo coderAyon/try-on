@@ -7,7 +7,7 @@
 
 import { picoDetector, type FacePose, type FaceTrackerResult, type Vec3 } from './picoDetector';
 import { LandmarkTracker } from './landmarkTracker';
-import { GlassesRenderer, GRID_COLS, GRID_ROWS, type Shade } from './glassesRenderer';
+import { GlassesRenderer, GRID_COLS, GRID_ROWS, type Shade, type SceneExtras } from './glassesRenderer';
 
 export interface MirrorFramePayload {
   frame: string;
@@ -86,6 +86,7 @@ class InPageMirror {
     ...[0, 1, 2].map(() => new OneEuro(1.7, 12)),
     ...[0, 1, 2, 3, 4, 5].map(() => new OneEuro(1.5, 6)),
     new OneEuro(0.6, 3),
+    new OneEuro(0.6, 3),
   ];
   private pose: FacePose | null = null;
   private lastPoseTime = 0;
@@ -95,6 +96,7 @@ class InPageMirror {
   private sampleCtx: CanvasRenderingContext2D | null = null;
   private frameCounter = 0;
   private shade: Shade = { gain: 1, tint: [1, 1, 1] };
+  private frameColor: [number, number, number] = [0.08, 0.08, 0.09];
 
   // Direct canvas drag-to-fit support
   private isDraggingGlasses: boolean = false;
@@ -501,9 +503,10 @@ class InPageMirror {
     if (request !== this.frameRequest) return;
 
     try {
-      const cutout = this.removeBackground(img);
+      const cutout = this.rectifyFront(this.removeBackground(img));
       // Geometry first: it relies on the lenses still being solid.
       this.frameGeom = this.analyzeEyewearGeometry(cutout);
+      this.frameColor = this.sampleRimColor(cutout);
       this.refineLenses(cutout);
       this.cutoutCanvas = cutout;
       this.fallbackImage = null;
@@ -1027,6 +1030,153 @@ class InPageMirror {
    * and made semi-transparent so the eyes show through faintly, while specular
    * highlights stay visible. Clear lenses become almost fully transparent.
    */
+  /**
+   * Turns an angled (three-quarter) product shot into an approximate front
+   * view. Under a side angle the far lens looks shorter and narrower, the
+   * frame line is tilted and the near temple arm sticks out sideways. We trim
+   * the arm, then warp so both lenses get equal width, equal height and a
+   * level centre line. Straight-on photos are only trimmed, never warped.
+   */
+  private rectifyFront(src: HTMLCanvasElement): HTMLCanvasElement {
+    const ctx = src.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return src;
+    const W = src.width, H = src.height;
+    if (W < 40 || H < 20) return src;
+    const d = ctx.getImageData(0, 0, W, H).data;
+    const A = (x: number, y: number) => d[(y * W + x) * 4 + 3];
+
+    const dens = new Float32Array(W), top = new Int32Array(W).fill(-1), bot = new Int32Array(W).fill(-1);
+    let maxD = 0;
+    for (let x = 0; x < W; x++) {
+      let c = 0;
+      for (let y = 0; y < H; y++) {
+        if (A(x, y) > 25) { if (top[x] < 0) top[x] = y; bot[x] = y; c++; }
+      }
+      dens[x] = c;
+      if (c > maxD) maxD = c;
+    }
+    if (maxD < 8) return src;
+
+    // 1. Trim temple arms: long thin runs at either end.
+    let L = 0, R = W - 1;
+    while (L < W && dens[L] < maxD * 0.28) L++;
+    while (R > 0 && dens[R] < maxD * 0.28) R--;
+    if (R - L < W * 0.3) return src;
+    const margin = Math.round((R - L) * 0.03);
+    for (let k = 0; k < margin && L > 0 && dens[L - 1] > 0; k++) L--;
+    for (let k = 0; k < margin && R < W - 1 && dens[R + 1] > 0; k++) R++;
+
+    // 2. Bridge = least dense column in the middle of the front.
+    let bridge = Math.round((L + R) / 2), minD = Infinity;
+    for (let x = Math.round(L + (R - L) * 0.32); x <= Math.round(L + (R - L) * 0.68); x++) {
+      let sum = 0, cnt = 0;
+      for (let k = -2; k <= 2; k++) if (x + k >= 0 && x + k < W) { sum += dens[x + k]; cnt++; }
+      if (sum / cnt < minD) { minD = sum / cnt; bridge = x; }
+    }
+
+    // 3. Lens extents from the central half of each side.
+    const lens = (a: number, b: number) => {
+      const tops: number[] = [], bots: number[] = [];
+      for (let x = Math.round(a + (b - a) * 0.25); x <= Math.round(a + (b - a) * 0.75); x++) {
+        if (top[x] >= 0) { tops.push(top[x]); bots.push(bot[x]); }
+      }
+      if (!tops.length) return null;
+      tops.sort((p, q) => p - q); bots.sort((p, q) => p - q);
+      const t = tops[tops.length >> 1], bo = bots[bots.length >> 1];
+      return { h: Math.max(4, bo - t), y: (t + bo) / 2, w: b - a, c: (a + b) / 2 };
+    };
+    const l = lens(L, bridge), r = lens(bridge, R);
+
+    const crop = (x0: number, x1: number) => {
+      if (x0 <= 0 && x1 >= W - 1) return src;
+      const out = document.createElement('canvas');
+      out.width = x1 - x0 + 1; out.height = H;
+      out.getContext('2d')?.drawImage(src, x0, 0, out.width, H, 0, 0, out.width, H);
+      return out;
+    };
+    if (!l || !r) return crop(L, R);
+
+    const span = R - L;
+    const angled = Math.abs(l.h - r.h) / Math.max(l.h, r.h) > 0.05
+      || Math.abs(l.w - r.w) / Math.max(l.w, r.w) > 0.07
+      || Math.abs(l.y - r.y) > span * 0.02;
+    if (!angled) return crop(L, R);
+
+    // 4. Inverse-mapped warp with premultiplied bilinear sampling.
+    const half = Math.max(l.w, r.w);
+    const hAvg = (l.h + r.h) / 2;
+    const outW = Math.round(half * 2);
+    const outH = Math.round(H * hAvg / Math.min(l.h, r.h));
+    const yMidSrc = (l.y + r.y) / 2;
+    const yMidOut = outH / 2 + (yMidSrc - H / 2) * hAvg / Math.min(l.h, r.h);
+    const out = document.createElement('canvas');
+    out.width = outW; out.height = outH;
+    const octx = out.getContext('2d', { willReadFrequently: true });
+    if (!octx) return crop(L, R);
+    const o = octx.createImageData(outW, outH);
+    const od = o.data;
+    const sample = (sx: number, sy: number, k: number) => {
+      const x0 = Math.floor(sx), y0 = Math.floor(sy);
+      const fx = sx - x0, fy = sy - y0;
+      let r0 = 0, g0 = 0, b0 = 0, a0 = 0;
+      for (let j = 0; j < 4; j++) {
+        const xx = x0 + (j & 1), yy = y0 + (j >> 1);
+        if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
+        const w = ((j & 1) ? fx : 1 - fx) * ((j >> 1) ? fy : 1 - fy);
+        const i = (yy * W + xx) * 4;
+        const a = d[i + 3] * w;
+        r0 += d[i] * a; g0 += d[i + 1] * a; b0 += d[i + 2] * a; a0 += a;
+      }
+      if (a0 > 0) { od[k] = r0 / a0; od[k + 1] = g0 / a0; od[k + 2] = b0 / a0; od[k + 3] = a0; }
+    };
+    for (let x = 0; x < outW; x++) {
+      const sx = x < half ? L + (x / half) * (bridge - L) : bridge + ((x - half) / half) * (R - bridge);
+      const t = Math.max(-0.5, Math.min(1.5, (sx - l.c) / (r.c - l.c)));
+      const h = l.h + (r.h - l.h) * t;
+      const yc = l.y + (r.y - l.y) * t;
+      const sc = h / hAvg;
+      for (let y = 0; y < outH; y++) {
+        sample(sx, yc + (y - yMidOut) * sc, (y * outW + x) * 4);
+      }
+    }
+    octx.putImageData(o, 0, 0);
+
+    // Crop to content
+    let y0 = outH, y1 = 0;
+    for (let y = 0; y < outH; y++) {
+      for (let x = 0; x < outW; x++) {
+        if (od[(y * outW + x) * 4 + 3] > 25) { if (y < y0) y0 = y; if (y > y1) y1 = y; break; }
+      }
+    }
+    if (y1 <= y0) return crop(L, R);
+    const fin = document.createElement('canvas');
+    fin.width = outW; fin.height = y1 - y0 + 1;
+    fin.getContext('2d')?.drawImage(out, 0, y0, outW, fin.height, 0, 0, outW, fin.height);
+    return fin;
+  }
+
+  /** Typical rim colour (median of the frame's outer edge), used for the 3D temple arms. */
+  private sampleRimColor(canvas: HTMLCanvasElement): [number, number, number] {
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const fallback: [number, number, number] = [0.08, 0.08, 0.09];
+    if (!ctx) return fallback;
+    const W = canvas.width, H = canvas.height;
+    const d = ctx.getImageData(0, 0, W, H).data;
+    const rs: number[] = [], gs: number[] = [], bs: number[] = [];
+    // Outer ends of the frame (end pieces / hinges) carry the temple colour.
+    for (const [x0, x1] of [[0, Math.round(W * 0.08)], [Math.round(W * 0.92), W]]) {
+      for (let y = 0; y < H; y++) {
+        for (let x = x0; x < x1; x++) {
+          const i = (y * W + x) * 4;
+          if (d[i + 3] > 200) { rs.push(d[i]); gs.push(d[i + 1]); bs.push(d[i + 2]); }
+        }
+      }
+    }
+    if (rs.length < 10) return fallback;
+    const med = (a: number[]) => { a.sort((p, q) => p - q); return a[a.length >> 1] / 255; };
+    return [med(rs), med(gs), med(bs)];
+  }
+
   private refineLenses(canvas: HTMLCanvasElement) {
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) return;
@@ -1282,6 +1432,7 @@ class InPageMirror {
       raw.xAxis.x, raw.xAxis.y, raw.xAxis.z,
       raw.yAxis.x, raw.yAxis.y, raw.yAxis.z,
       raw.ipd,
+      raw.faceWidth ?? raw.ipd * 2.3,
     ].map((x, i) => f[i].filter(x, dt));
     const xAxis = vNorm({ x: v[3], y: v[4], z: v[5] });
     const yRaw = { x: v[6], y: v[7], z: v[8] };
@@ -1289,7 +1440,7 @@ class InPageMirror {
     const yAxis = vNorm({ x: yRaw.x - xAxis.x * k, y: yRaw.y - xAxis.y * k, z: yRaw.z - xAxis.z * k });
     return {
       origin: { x: v[0], y: v[1], z: v[2] },
-      xAxis, yAxis, zAxis: vCross(xAxis, yAxis), ipd: v[9],
+      xAxis, yAxis, zAxis: vCross(xAxis, yAxis), ipd: v[9], faceWidth: v[10],
     };
   }
 
@@ -1301,11 +1452,13 @@ class InPageMirror {
   }
 
   /**
-   * Projects the product cut-out onto the face as a slightly wrapped surface
-   * sitting in front of the eyes. Lens centres land on the eye centres, the
-   * frame foreshortens with yaw/pitch and gets mild perspective.
+   * Places the product cut-out on the face as a 3D object: a slightly wrapped
+   * frame front sitting ahead of the eyes, sized to the face width at the
+   * temples (how real frames are chosen) with the lens centres kept close to
+   * the eyes, plus temple arms running back to the ears. A head-shaped
+   * stand-in, sized from the same measurements, hides whatever is behind it.
    */
-  private buildMesh(pose: FacePose, cw: number, src: { width: number; height: number }) {
+  private buildScene(pose: FacePose, cw: number, src: { width: number; height: number }) {
     const g = this.frameGeom;
     const texW = src.width, texH = src.height;
     const bridgeX = g ? g.bridge.x : texW * 0.5;
@@ -1314,16 +1467,33 @@ class InPageMirror {
     const photoRoll = g ? g.roll : 0;
 
     const ipdPx = pose.ipd * cw;
-    const S = (ipdPx / lensSpan) * this.userScale;        // canvas px per texture px
+    const faceW = (pose.faceWidth ?? pose.ipd * 2.3) * cw;
+    // Frame front ~ face width at the temples; never let the lens centres drift
+    // far from the pupils (keeps very wide/narrow faces and odd photos sane).
+    const byFace = (faceW * 0.98) / texW;
+    const byEyes = ipdPx / lensSpan;
+    const S = Math.max(byEyes * 0.88, Math.min(byEyes * 1.3, byFace)) * this.userScale;
     const halfW = (texW * S) / 2;
     const forward = ipdPx * 0.22;                           // lens plane sits ahead of the eyes
     const wrap = 0.1;                                       // frame-front curvature
     const focal = ipdPx * 9;                                // ~ webcam at arm's length
     const O = { x: pose.origin.x * cw, y: pose.origin.y * cw, z: pose.origin.z * cw };
     const { xAxis: X, yAxis: Y, zAxis: Z } = pose;
-    const cr = Math.cos(-photoRoll), sr = Math.sin(-photoRoll);
+    const depthScale = halfW * 6;
 
-    const out = this.meshPositions;
+    const project = (lx: number, ly: number, lz: number, out: Float32Array, k: number) => {
+      const px = O.x + X.x * lx + Y.x * ly + Z.x * lz;
+      const py = O.y + X.y * lx + Y.y * ly + Z.y * lz;
+      const depth = X.z * lx + Y.z * ly + Z.z * lz;
+      const persp = focal / Math.max(focal * 0.2, focal + depth);
+      out[k] = O.x + (px - O.x) * persp + this.userOffsetX;
+      out[k + 1] = O.y + (py - O.y) * persp + this.userOffsetY;
+      out[k + 2] = Math.max(-1, Math.min(1, depth / depthScale));
+    };
+
+    // Frame front
+    const cr = Math.cos(-photoRoll), sr = Math.sin(-photoRoll);
+    const front = this.meshPositions;
     let k = 0;
     for (let r = 0; r <= GRID_ROWS; r++) {
       for (let c = 0; c <= GRID_COLS; c++) {
@@ -1332,17 +1502,61 @@ class InPageMirror {
         const lx = (tx * cr - ty * sr) * S;
         const ly = (tx * sr + ty * cr) * S;
         const nx = lx / halfW;
-        const lz = -forward + wrap * halfW * nx * nx;
-        const px = O.x + X.x * lx + Y.x * ly + Z.x * lz;
-        const py = O.y + X.y * lx + Y.y * ly + Z.y * lz;
-        const depth = X.z * lx + Y.z * ly + Z.z * lz;
-        const persp = focal / (focal + depth);
-        out[k++] = O.x + (px - O.x) * persp + this.userOffsetX;
-        out[k++] = O.y + (py - O.y) * persp + this.userOffsetY;
-        out[k++] = Math.max(-1, Math.min(1, depth / (halfW * 4)));
+        project(lx, ly, -forward + wrap * halfW * nx * nx, front, k);
+        k += 3;
       }
     }
-    return out;
+
+    // Temple arms: thin boxes from the hinges straight back toward the ears.
+    const leftEdge = -bridgeX * S, rightEdge = (texW - bridgeX) * S;
+    const hingeY = (texH * 0.3 - pupilY) * S;
+    const armLen = halfW * 2 * 0.78;
+    const armH = Math.max(2, halfW * 2 * 0.04), armT = Math.max(1.5, halfW * 2 * 0.014);
+    const temples = new Float32Array(2 * 36 * 4);
+    let t = 0;
+    const tmp = new Float32Array(3);
+    const quad = (pts: number[][], shadeV: number) => {
+      for (const i of [0, 1, 2, 0, 2, 3]) {
+        project(pts[i][0], pts[i][1], pts[i][2], tmp, 0);
+        temples[t++] = tmp[0]; temples[t++] = tmp[1]; temples[t++] = tmp[2]; temples[t++] = shadeV;
+      }
+    };
+    for (const [edge, side] of [[leftEdge, -1], [rightEdge, 1]] as const) {
+      const x0 = edge - side * armT * 0.5, x1 = edge + side * armT * 0.5;
+      const z0 = -forward + wrap * halfW + armT, z1 = z0 + armLen;
+      const yT0 = hingeY - armH / 2, yB0 = hingeY + armH / 2;
+      const drop = armLen * 0.06;                            // arms dip slightly toward the ears
+      const yT1 = yT0 + drop, yB1 = yB0 + drop;
+      quad([[x1, yT0, z0], [x1, yT1, z1], [x1, yB1, z1], [x1, yB0, z0]], 0.95); // outer side
+      quad([[x0, yT0, z0], [x0, yT1, z1], [x0, yB1, z1], [x0, yB0, z0]], 0.7);  // inner side
+      quad([[x0, yT0, z0], [x1, yT0, z0], [x1, yT1, z1], [x0, yT1, z1]], 1.25); // top
+      quad([[x0, yB0, z0], [x1, yB0, z0], [x1, yB1, z1], [x0, yB1, z1]], 0.55); // bottom
+      quad([[x0, yT0, z0], [x1, yT0, z0], [x1, yB0, z0], [x0, yB0, z0]], 0.9);  // hinge cap
+      quad([[x0, yT1, z1], [x1, yT1, z1], [x1, yB1, z1], [x0, yB1, z1]], 0.8);  // end
+    }
+
+    // Head stand-in: ellipsoid just inside the arms, measured from the face.
+    const rx = Math.min(faceW * 0.5, Math.max(halfW, faceW * 0.45) - armT * 1.5);
+    const rz = rx * 1.25, ry = rx * 1.45;
+    const cz = rz - ipdPx * 0.12, cy = ipdPx * 0.35;
+    const LAT = 12, LON = 20;
+    const occluder = new Float32Array(LAT * LON * 6 * 3);
+    const vert = (i: number, j: number, out: Float32Array, o: number) => {
+      const th = (i / LAT) * Math.PI, ph = (j / LON) * Math.PI * 2;
+      project(rx * Math.sin(th) * Math.cos(ph), cy - ry * Math.cos(th), cz + rz * Math.sin(th) * Math.sin(ph), out, o);
+    };
+    let o = 0;
+    for (let i = 0; i < LAT; i++) {
+      for (let j = 0; j < LON; j++) {
+        for (const [di, dj] of [[0, 0], [1, 0], [1, 1], [0, 0], [1, 1], [0, 1]]) {
+          vert(i + di, j + dj, occluder, o);
+          o += 3;
+        }
+      }
+    }
+
+    const extras: SceneExtras = { occluder, temples, templeColor: this.frameColor };
+    return { front, extras };
   }
 
   /**
@@ -1442,13 +1656,13 @@ class InPageMirror {
       if (!frameSource || !pose || !this.hasFittedOnce) return;
 
       if (this.frameCounter++ % 6 === 0) this.updateShade(source, srcW, srcH, pose);
-      const mesh = this.buildMesh(pose, cw, frameSource);
+      const { front: mesh, extras } = this.buildScene(pose, cw, frameSource);
       const ipdPx = pose.ipd * cw;
       // Mipmaps already pick the right resolution; a small extra LOD bias
       // softens the studio-sharp product photo to webcam softness.
       const blur = 0.5;
 
-      if (this.renderer.render(cw, ch, mesh, this.shade, blur)) {
+      if (this.renderer.render(cw, ch, mesh, this.shade, blur, extras)) {
         const layer = this.renderer.canvas;
         // Soft contact shadow cast onto the nose and cheeks
         ctx.save();

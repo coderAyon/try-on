@@ -52,8 +52,13 @@ function solvePose(face: NormalizedLandmark[], w: number, h: number, matrix?: Ar
   // Eye distance measured on screen is precise; undo the yaw foreshortening
   // with the solved axis instead of trusting per-landmark depth.
   const flat = Math.hypot(eyeR.x - eyeL.x, eyeR.y - eyeL.y);
-  const ipd = flat / Math.max(0.35, Math.hypot(xAxis.x, xAxis.y));
-  return { origin, xAxis, yAxis, zAxis, ipd, eyeL, eyeR };
+  const foreshorten = Math.max(0.35, Math.hypot(xAxis.x, xAxis.y));
+  const ipd = flat / foreshorten;
+  // Face width at eye level (contour points beside the eyes, where temples
+  // sit). Glasses are chosen to roughly match it, so it drives frame size.
+  const sideA = P(127), sideB = P(356);
+  const faceWidth = Math.hypot(sideB.x - sideA.x, sideB.y - sideA.y) / foreshorten;
+  return { origin, xAxis, yAxis, zAxis, ipd, faceWidth, eyeL, eyeR };
 }
 
 let connected = false;
@@ -92,7 +97,7 @@ window.addEventListener('message', async event => {
             eyeSpan: pose.ipd,
             rollRad: Math.atan2(eyeR.y - eyeL.y, eyeR.x - eyeL.x),
             confidence: 1,
-            pose: { origin: pose.origin, xAxis: pose.xAxis, yAxis: pose.yAxis, zAxis: pose.zAxis, ipd: pose.ipd },
+            pose: { origin: pose.origin, xAxis: pose.xAxis, yAxis: pose.yAxis, zAxis: pose.zAxis, ipd: pose.ipd, faceWidth: pose.faceWidth },
           };
         }
         port.postMessage({ type: 'result', result, id: data.id });

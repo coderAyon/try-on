@@ -33,7 +33,36 @@ void main() {
   outColor = c;
 }`;
 
+// Solid geometry (temple arms, head occluder): position + per-vertex shade.
+const SOLID_VERT = `#version 300 es
+in vec3 aPos;
+in float aShade;
+uniform vec2 uSize;
+out float vShade;
+void main() {
+  vShade = aShade;
+  gl_Position = vec4(aPos.x / uSize.x * 2.0 - 1.0, 1.0 - aPos.y / uSize.y * 2.0, aPos.z, 1.0);
+}`;
+
+const SOLID_FRAG = `#version 300 es
+precision highp float;
+in float vShade;
+uniform vec3 uColor;
+out vec4 outColor;
+void main() {
+  outColor = vec4(uColor * vShade, 1.0);
+}`;
+
 export interface Shade { gain: number; tint: [number, number, number] }
+
+/** Extra 3D parts drawn around the textured frame front. */
+export interface SceneExtras {
+  /** Head stand-in (x, y, depth per vertex, triangles). Writes depth only. */
+  occluder: Float32Array;
+  /** Temple arms (x, y, depth, shade per vertex, triangles). */
+  temples: Float32Array;
+  templeColor: [number, number, number];
+}
 
 export class GlassesRenderer {
   readonly canvas = document.createElement('canvas');
@@ -48,6 +77,11 @@ export class GlassesRenderer {
   private uBias: WebGLUniformLocation | null = null;
   private indexCount = 0;
   private hasTexture = false;
+  private solidProg: WebGLProgram | null = null;
+  private solidVao: WebGLVertexArrayObject | null = null;
+  private solidBuf: WebGLBuffer | null = null;
+  private uSolidSize: WebGLUniformLocation | null = null;
+  private uSolidColor: WebGLUniformLocation | null = null;
 
   constructor() {
     this.gl = this.canvas.getContext('webgl2', {
@@ -71,11 +105,31 @@ export class GlassesRenderer {
       if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s) || 'shader');
       return s;
     };
-    const prog = gl.createProgram()!;
-    gl.attachShader(prog, compile(gl.VERTEX_SHADER, VERT));
-    gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, FRAG));
-    gl.linkProgram(prog);
-    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog) || 'link');
+    const link = (vs: string, fs: string) => {
+      const pr = gl.createProgram()!;
+      gl.attachShader(pr, compile(gl.VERTEX_SHADER, vs));
+      gl.attachShader(pr, compile(gl.FRAGMENT_SHADER, fs));
+      gl.linkProgram(pr);
+      if (!gl.getProgramParameter(pr, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(pr) || 'link');
+      return pr;
+    };
+
+    const solid = link(SOLID_VERT, SOLID_FRAG);
+    this.solidProg = solid;
+    this.solidVao = gl.createVertexArray();
+    gl.bindVertexArray(this.solidVao);
+    this.solidBuf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.solidBuf);
+    const sPos = gl.getAttribLocation(solid, 'aPos');
+    const sShade = gl.getAttribLocation(solid, 'aShade');
+    gl.enableVertexAttribArray(sPos);
+    gl.vertexAttribPointer(sPos, 3, gl.FLOAT, false, 16, 0);
+    gl.enableVertexAttribArray(sShade);
+    gl.vertexAttribPointer(sShade, 1, gl.FLOAT, false, 16, 12);
+    this.uSolidSize = gl.getUniformLocation(solid, 'uSize');
+    this.uSolidColor = gl.getUniformLocation(solid, 'uColor');
+
+    const prog = link(VERT, FRAG);
     this.prog = prog;
     gl.useProgram(prog);
 
@@ -151,7 +205,7 @@ export class GlassesRenderer {
    * @param positions (GRID_COLS+1)*(GRID_ROWS+1) vertices as x,y (canvas px), depth (-1..1)
    * @param blur mip LOD bias; ~0.5 softens studio-sharp product photos to webcam softness
    */
-  render(width: number, height: number, positions: Float32Array, shade: Shade, blur: number): boolean {
+  render(width: number, height: number, positions: Float32Array, shade: Shade, blur: number, extras?: SceneExtras): boolean {
     const gl = this.gl;
     if (!gl || !this.prog || !this.hasTexture) return false;
     if (this.canvas.width !== width || this.canvas.height !== height) {
@@ -166,6 +220,27 @@ export class GlassesRenderer {
     gl.depthFunc(gl.LEQUAL);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+
+    if (extras && this.solidProg) {
+      gl.useProgram(this.solidProg);
+      gl.bindVertexArray(this.solidVao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.solidBuf);
+      gl.uniform2f(this.uSolidSize, width, height);
+      // 1. Head stand-in: depth only, so arms behind the head are hidden.
+      const occ = new Float32Array(extras.occluder.length / 3 * 4);
+      for (let i = 0, j = 0; i < extras.occluder.length; i += 3, j += 4) {
+        occ[j] = extras.occluder[i]; occ[j + 1] = extras.occluder[i + 1]; occ[j + 2] = extras.occluder[i + 2]; occ[j + 3] = 1;
+      }
+      gl.bufferData(gl.ARRAY_BUFFER, occ, gl.STREAM_DRAW);
+      gl.colorMask(false, false, false, false);
+      gl.drawArrays(gl.TRIANGLES, 0, occ.length / 4);
+      gl.colorMask(true, true, true, true);
+      // 2. Temple arms, before the front so they show through tinted lenses.
+      gl.bufferData(gl.ARRAY_BUFFER, extras.temples, gl.STREAM_DRAW);
+      const c = extras.templeColor;
+      gl.uniform3f(this.uSolidColor, c[0] * shade.gain * shade.tint[0], c[1] * shade.gain * shade.tint[1], c[2] * shade.gain * shade.tint[2]);
+      gl.drawArrays(gl.TRIANGLES, 0, extras.temples.length / 4);
+    }
 
     gl.useProgram(this.prog);
     gl.bindVertexArray(this.vao);

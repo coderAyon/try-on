@@ -30,6 +30,7 @@ export interface FacePose {
   yAxis: Vec3;   // unit vector down the face, forehead -> chin
   zAxis: Vec3;   // unit vector into the screen (away from the camera)
   ipd: number;   // 3D distance between the eye centres
+  faceWidth?: number; // face width at eye level (temple to temple)
 }
 
 type ClassifyRegionFn = (r: number, c: number, s: number, pixels: Uint8Array, ldim: number) => number;
