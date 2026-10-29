@@ -15,23 +15,44 @@ const cross = (a: V, b: V): V => ({ x: a.y * b.z - a.z * b.y, y: a.z * b.x - a.x
  * so x, y and z share one scale. Eye corners are used instead of the irises:
  * they are fixed to the skull, so glasses no longer slide when the eyes move.
  */
-function solvePose(face: NormalizedLandmark[], w: number, h: number) {
+function solvePose(face: NormalizedLandmark[], w: number, h: number, matrix?: ArrayLike<number>) {
   const P = (i: number): V => ({ x: 1 - face[i].x, y: face[i].y * h / w, z: face[i].z });
   const mid = (a: number, b: number) => mul(add(P(a), P(b)), 0.5);
 
   let eyeL = mid(33, 133), eyeR = mid(362, 263);
   if (eyeL.x > eyeR.x) [eyeL, eyeR] = [eyeR, eyeL];
 
-  // Average the outer and inner corner baselines for a steadier horizontal axis.
-  let across = add(sub(P(263), P(33)), sub(P(362), P(133)));
-  if (across.x < 0) across = mul(across, -1);
-  const xAxis = norm(across);
-  const down = sub(P(152), P(10));
-  const yAxis = norm(sub(down, mul(xAxis, dot(down, xAxis))));
+  let xAxis: V, yAxis: V;
+  if (matrix && matrix.length >= 16) {
+    // Rotation from MediaPipe's solved head pose (column-major 4x4, OpenGL
+    // camera: y up, z toward the viewer). Mirroring and flipping to screen
+    // axes (y down, z into the screen) maps camera vector v to -v, and our
+    // axes are canonical -x and -y, so they are simply columns 0 and 1.
+    xAxis = norm({ x: matrix[0], y: matrix[1], z: matrix[2] });
+    const col1 = { x: matrix[4], y: matrix[5], z: matrix[6] };
+    yAxis = norm(sub(col1, mul(xAxis, dot(col1, xAxis))));
+  } else {
+    // Fallback from landmarks. MediaPipe's per-point depth is coarse, so this
+    // overestimates pitch; only used if the matrix is unavailable.
+    let across = add(sub(P(263), P(33)), sub(P(362), P(133)));
+    if (across.x < 0) across = mul(across, -1);
+    xAxis = norm(across);
+    const down = sub(P(152), P(10));
+    yAxis = norm(sub(down, mul(xAxis, dot(down, xAxis))));
+  }
+  // Halve the pitch: estimates carry a forward bias and laptop users look
+  // down a lot; full foreshortening squashed the frame into a thin strip.
+  const pitch = Math.asin(Math.max(-1, Math.min(1, yAxis.z)));
+  const zRaw = cross(xAxis, yAxis);
+  const t = -0.5 * pitch;
+  yAxis = norm(add(mul(yAxis, Math.cos(t)), mul(zRaw, Math.sin(t))));
   const zAxis = cross(xAxis, yAxis);
 
   const origin = mul(add(eyeL, eyeR), 0.5);
-  const ipd = len(sub(eyeR, eyeL));
+  // Eye distance measured on screen is precise; undo the yaw foreshortening
+  // with the solved axis instead of trusting per-landmark depth.
+  const flat = Math.hypot(eyeR.x - eyeL.x, eyeR.y - eyeL.y);
+  const ipd = flat / Math.max(0.35, Math.hypot(xAxis.x, xAxis.y));
   return { origin, xAxis, yAxis, zAxis, ipd, eyeL, eyeR };
 }
 
@@ -47,6 +68,7 @@ window.addEventListener('message', async event => {
       // VIDEO mode re-uses the previous face box between frames: faster and far less jittery.
       runningMode: 'VIDEO', numFaces: 1,
       minFaceDetectionConfidence: 0.5, minFacePresenceConfidence: 0.5, minTrackingConfidence: 0.5,
+      outputFacialTransformationMatrixes: true,
     });
     let lastTs = 0;
     port.onmessage = ({ data }) => {
@@ -55,10 +77,11 @@ window.addEventListener('message', async event => {
       try {
         const ts = Math.max(lastTs + 1, performance.now());
         lastTs = ts;
-        const face = tracker.detectForVideo(bitmap, ts).faceLandmarks[0];
+        const detection = tracker.detectForVideo(bitmap, ts);
+        const face = detection.faceLandmarks[0];
         let result = null;
         if (face) {
-          const pose = solvePose(face, bitmap.width, bitmap.height);
+          const pose = solvePose(face, bitmap.width, bitmap.height, detection.facialTransformationMatrixes?.[0]?.data);
           const { eyeL, eyeR } = pose;
           const aspect = bitmap.width / bitmap.height;
           result = {

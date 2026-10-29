@@ -544,12 +544,22 @@ class InPageMirror {
 
     const data = imgData.data;
 
-    // Check if the image is already a transparent PNG (> 3% transparent pixels)
-    let transparentCount = 0;
-    for (let i = 3; i < data.length; i += 4) {
-      if (data[i] < 200) transparentCount++;
+    // Already a cut-out PNG? Judge by the border: semi-transparent lenses on
+    // an opaque white background must still go through background removal.
+    let borderTransparent = 0, borderCount = 0;
+    for (let x = 0; x < width; x++) {
+      for (const y of [0, height - 1]) {
+        borderCount++;
+        if (data[(y * width + x) * 4 + 3] < 200) borderTransparent++;
+      }
     }
-    const isAlreadyIsolated = transparentCount > (width * height * 0.03);
+    for (let y = 1; y < height - 1; y++) {
+      for (const x of [0, width - 1]) {
+        borderCount++;
+        if (data[(y * width + x) * 4 + 3] < 200) borderTransparent++;
+      }
+    }
+    const isAlreadyIsolated = borderTransparent > borderCount * 0.5;
 
     if (!isAlreadyIsolated) {
       // 1. Multi-seed border sampling around perimeter
@@ -653,6 +663,10 @@ class InPageMirror {
 
       this.softMatte(data, width, height, visited, seeds);
     }
+
+    // Shop watermarks, logos and price text are separate islands; keep the glasses.
+    this.eraseCastShadows(data, width, height);
+    this.keepMainComponents(data, width, height);
 
     // 3. Find bounding box of remaining frame pixels
     let minX = width, minY = height, maxX = 0, maxY = 0;
@@ -785,6 +799,111 @@ class InPageMirror {
     }
 
     return canvas;
+  }
+
+  /**
+   * Removes opaque islands that are much smaller than the largest one (logos,
+   * watermarks, captions). Rimless lenses and separate temple pieces are
+   * comparable in size to the main piece, so they survive.
+   */
+  private keepMainComponents(data: Uint8ClampedArray, width: number, height: number) {
+    const n = width * height;
+    const label = new Int32Array(n);
+    const sizes: number[] = [0];
+    const stack = new Int32Array(n);
+    for (let start = 0; start < n; start++) {
+      if (label[start] || data[start * 4 + 3] <= 25) continue;
+      const id = sizes.length;
+      let size = 0, sp = 0;
+      stack[sp++] = start;
+      label[start] = id;
+      while (sp > 0) {
+        const p = stack[--sp];
+        size++;
+        const x = p % width, y = (p / width) | 0;
+        for (let dy = -1; dy <= 1; dy++) {
+          const yy = y + dy;
+          if (yy < 0 || yy >= height) continue;
+          for (let dx = -1; dx <= 1; dx++) {
+            const xx = x + dx;
+            if (xx < 0 || xx >= width) continue;
+            const q = yy * width + xx;
+            if (!label[q] && data[q * 4 + 3] > 25) {
+              label[q] = id;
+              stack[sp++] = q;
+            }
+          }
+        }
+      }
+      sizes.push(size);
+    }
+    if (sizes.length <= 2) return;
+    const keepMin = Math.max(...sizes) * 0.12;
+    for (let i = 0; i < n; i++) {
+      const l = label[i];
+      if (l && sizes[l] < keepMin) data[i * 4 + 3] = 0;
+    }
+  }
+
+  /**
+   * Product photos often carry a soft grey drop shadow under the bridge; left
+   * in, it shows up as a pale ghost on the nose. Grow from the transparent
+   * area into neutral, light, smooth pixels (shadow), stopping at the frame:
+   * rims are dark, coloured or carry sharp edges.
+   */
+  private eraseCastShadows(data: Uint8ClampedArray, width: number, height: number) {
+    const n = width * height;
+    const lum = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      lum[i] = 0.2126 * data[i * 4] + 0.7152 * data[i * 4 + 1] + 0.0722 * data[i * 4 + 2];
+    }
+    const isShadow = (i: number) => {
+      const a = data[i * 4 + 3];
+      if (a <= 25) return false;
+      const r = data[i * 4], g = data[i * 4 + 1], b = data[i * 4 + 2];
+      if (Math.max(r, g, b) - Math.min(r, g, b) > 30) return false;
+      const x = i % width;
+      if (a < 150) {
+        // Shadows baked into transparent PNGs are faint. Anti-aliased frame
+        // edges are faint too, but always touch a solid frame pixel.
+        const y = (i / width) | 0;
+        for (let dy = -2; dy <= 2; dy++) {
+          const yy = y + dy;
+          if (yy < 0 || yy >= height) continue;
+          for (let dx = -2; dx <= 2; dx++) {
+            const xx = x + dx;
+            if (xx >= 0 && xx < width && data[(yy * width + xx) * 4 + 3] > 200) return false;
+          }
+        }
+        return true;
+      }
+      if (lum[i] < 120) return false;
+      let grad = 0;
+      if (x > 0) grad = Math.max(grad, Math.abs(lum[i] - lum[i - 1]));
+      if (x < width - 1) grad = Math.max(grad, Math.abs(lum[i] - lum[i + 1]));
+      if (i >= width) grad = Math.max(grad, Math.abs(lum[i] - lum[i - width]));
+      if (i + width < n) grad = Math.max(grad, Math.abs(lum[i] - lum[i + width]));
+      return grad < 14;
+    };
+    const queue = new Int32Array(n);
+    const done = new Uint8Array(n);
+    let head = 0, tail = 0;
+    for (let i = 0; i < n; i++) {
+      if (data[i * 4 + 3] <= 25) { done[i] = 1; queue[tail++] = i; }
+    }
+    while (head < tail) {
+      const p = queue[head++];
+      const x = p % width;
+      const nb = [x > 0 ? p - 1 : -1, x < width - 1 ? p + 1 : -1, p - width, p + width];
+      for (const q of nb) {
+        if (q < 0 || q >= n || done[q]) continue;
+        done[q] = 1;
+        if (isShadow(q)) {
+          data[q * 4 + 3] = 0;
+          queue[tail++] = q;
+        }
+      }
+    }
   }
 
   private clearEnclosedBackground(
