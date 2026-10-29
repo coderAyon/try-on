@@ -10,6 +10,19 @@ be fully corrected by a 2D overlay. Size, Nose, and drag controls allow fine tun
 Run `node scripts/verify-extension-mirror.cjs` to check the unpacked extension,
 local WASM loading, eye fitting, face loss, and reflection cleanup in Chrome.
 
+### 3D frames (image-to-3D)
+
+When you try on a frame, the mirror fits a flat cut-out of the product photo
+immediately. In the background, the extension sends **the product image you
+clicked** (never the camera feed) to the public
+[Hunyuan3D-2 Hugging Face Space](https://huggingface.co/spaces/tencent/Hunyuan3D-2),
+which returns a 3D shape (~20-40 s). The mirror then swaps in the 3D model,
+coloured from the product photo, with real temple arms that turn with your head.
+The header shows "Building 3D model…", then "· 3D" or "· 2D fit" if the free
+service is busy, asleep or out of quota. Models are cached per image URL.
+Hunyuan3D-2 is released under the Tencent Hunyuan Community License; review it
+before commercial use.
+
 Browse any e-commerce or fashion website (Amazon, Ray-Ban, Prada, Oakley, etc.), hover over any sunglasses image, click **"Try This Frame"**, and instantly try it on your face using real-time 3D AR face tracking with realistic depth occlusion!
 
 ---

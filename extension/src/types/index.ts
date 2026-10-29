@@ -36,6 +36,7 @@ export type ExtensionMessageType =
   | 'CLEAR_HISTORY'
   | 'CHECK_STATUS'
   | 'FETCH_IMAGE_DATA_URL'
+  | 'GENERATE_FRAME_3D'
   | 'SHOW_INPAGE_MIRROR';
 
 export interface ExtensionMessage {

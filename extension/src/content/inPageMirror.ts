@@ -7,7 +7,8 @@
 
 import { picoDetector, type FacePose, type FaceTrackerResult, type Vec3 } from './picoDetector';
 import { LandmarkTracker } from './landmarkTracker';
-import { GlassesRenderer, GRID_COLS, GRID_ROWS, type Shade, type SceneExtras } from './glassesRenderer';
+import { GlassesRenderer, GRID_COLS, GRID_ROWS, type Shade, type SceneExtras, type ModelPose } from './glassesRenderer';
+import { parseGlb, prepareFrameModel } from './frameModel';
 
 export interface MirrorFramePayload {
   frame: string;
@@ -97,6 +98,7 @@ class InPageMirror {
   private frameCounter = 0;
   private shade: Shade = { gain: 1, tint: [1, 1, 1] };
   private frameColor: [number, number, number] = [0.08, 0.08, 0.09];
+  private modelStatus: 'none' | 'building' | 'ready' | 'failed' = 'none';
 
   // Direct canvas drag-to-fit support
   private isDraggingGlasses: boolean = false;
@@ -511,6 +513,8 @@ class InPageMirror {
       this.cutoutCanvas = cutout;
       this.fallbackImage = null;
       this.renderer.setTexture(cutout);
+      this.renderer.setModel(null);
+      this.request3DModel(srcUrl, request);
     } catch (err) {
       console.warn('[Lumen Mirror] Background removal error, using raw image:', err);
       this.setStatus('Unable to process this image. Choose a front-facing product photo.');
@@ -519,6 +523,125 @@ class InPageMirror {
     }
 
     this.setStatus(null);
+  }
+
+  /**
+   * Asks the background worker to turn the product photo into a 3D model
+   * (hosted image-to-3D, ~20-40 s). The 2D fit stays on screen meanwhile and
+   * remains the fallback if the free service is busy or unavailable.
+   */
+  private request3DModel(srcUrl: string, request: number) {
+    if (typeof chrome === 'undefined' || !chrome.runtime?.id || !chrome.runtime?.sendMessage) return;
+    this.setModelStatus('building');
+    try {
+      chrome.runtime.sendMessage({ type: 'GENERATE_FRAME_3D', payload: { url: srcUrl } }, (res: any) => {
+        if (request !== this.frameRequest) return;
+        if (chrome.runtime?.lastError || !res?.success || !res.glb) {
+          console.warn('[Lumen Mirror] 3D model unavailable:', chrome.runtime?.lastError?.message || res?.error);
+          this.setModelStatus('failed');
+          return;
+        }
+        try {
+          const bin = atob(res.glb);
+          const bytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          this.applyModel(bytes.buffer);
+        } catch (err) {
+          console.warn('[Lumen Mirror] 3D model could not be used:', err);
+          this.setModelStatus('failed');
+        }
+      });
+    } catch {
+      this.setModelStatus('failed');
+    }
+  }
+
+  /** Installs a generated GLB as the rendered frame (also used by tests). */
+  public applyModel(glb: ArrayBuffer) {
+    const model = prepareFrameModel(parseGlb(glb));
+    this.alignPhotoToModel(model);
+    this.renderer.setModel(model);
+    this.setModelStatus(this.renderer.hasModel ? 'ready' : 'failed');
+  }
+
+  /**
+   * Bounding box of the lens body (thick part of the hole-filled mask). Thin
+   * leftovers such as arm stubs do not move it, so it is a stable anchor for
+   * matching the product photo to the generated model.
+   */
+  private lensBox(data: Uint8ClampedArray, w: number, h: number) {
+    const solid = this.solidMask(data, w, h);
+    let minX = w, maxX = -1;
+    for (let i = 0; i < solid.length; i++) if (solid[i]) { const x = i % w; if (x < minX) minX = x; if (x > maxX) maxX = x; }
+    if (maxX - minX < 10) return null;
+    const r = Math.max(2, (maxX - minX) * 0.03);
+    const inner = this.chamfer(solid, w, h);
+    let L = w, R = -1, T = h, B = -1;
+    for (let i = 0; i < solid.length; i++) {
+      if (inner[i] <= r) continue;
+      const x = i % w, y = (i / w) | 0;
+      if (x < L) L = x; if (x > R) R = x; if (y < T) T = y; if (y > B) B = y;
+    }
+    if (R <= L || B <= T) return null;
+    // Undo the erosion so the box hugs the lens outline again.
+    return { L: L - r, R: R + r, T: T - r, B: B + r };
+  }
+
+  /**
+   * Re-projects the product photo onto the model so the lens bodies line up:
+   * the model's front is rasterised to a mask and both lens boxes are matched.
+   */
+  private alignPhotoToModel(model: ReturnType<typeof prepareFrameModel>) {
+    const cut = this.cutoutCanvas;
+    const cctx = cut?.getContext('2d', { willReadFrequently: true });
+    if (!cut || !cctx) return;
+    const photoBox = this.lensBox(cctx.getImageData(0, 0, cut.width, cut.height).data, cut.width, cut.height);
+    if (!photoBox) return;
+
+    const P = model.positions, I = model.indices;
+    let minY = Infinity, maxY = -Infinity;
+    for (let i = 0; i < P.length; i += 3) {
+      if (P[i + 2] > 0.12) continue;
+      if (P[i + 1] < minY) minY = P[i + 1];
+      if (P[i + 1] > maxY) maxY = P[i + 1];
+    }
+    const MW = 400, scale = MW / 1.1;                      // x in [-0.55, 0.55]
+    const MH = Math.max(20, Math.round((maxY - minY + 0.1) * scale));
+    const mask = document.createElement('canvas');
+    mask.width = MW; mask.height = MH;
+    const m = mask.getContext('2d', { willReadFrequently: true });
+    if (!m) return;
+    const px = (x: number) => (x + 0.55) * scale, py = (y: number) => (y - minY + 0.05) * scale;
+    m.fillStyle = '#000';
+    m.beginPath();
+    for (let t = 0; t < I.length; t += 3) {
+      const a = I[t] * 3, b = I[t + 1] * 3, c = I[t + 2] * 3;
+      if (P[a + 2] > 0.12 || P[b + 2] > 0.12 || P[c + 2] > 0.12) continue;
+      m.moveTo(px(P[a]), py(P[a + 1])); m.lineTo(px(P[b]), py(P[b + 1])); m.lineTo(px(P[c]), py(P[c + 1])); m.closePath();
+    }
+    m.fill();
+    const modelBox = this.lensBox(m.getImageData(0, 0, MW, MH).data, MW, MH);
+    if (!modelBox) return;
+
+    // local -> mask pixels -> photo pixels -> photo uv
+    const sx = (photoBox.R - photoBox.L) / (modelBox.R - modelBox.L);
+    const sy = (photoBox.B - photoBox.T) / (modelBox.B - modelBox.T);
+    for (let i = 0, k = 0; i < P.length; i += 3, k += 2) {
+      const mxp = px(P[i]), myp = py(P[i + 1]);
+      model.uvs[k] = (photoBox.L + (mxp - modelBox.L) * sx) / cut.width;
+      model.uvs[k + 1] = (photoBox.T + (myp - modelBox.T) * sy) / cut.height;
+    }
+  }
+
+  private setModelStatus(status: 'none' | 'building' | 'ready' | 'failed') {
+    this.modelStatus = status;
+    const el = this.container?.querySelector<HTMLElement>('#lumen-meta-brand');
+    if (!el) return;
+    const brand = this.currentPayload?.brand || 'Eyewear Store';
+    el.textContent = status === 'building' ? 'Building 3D model…'
+      : status === 'ready' ? `${brand} · 3D`
+      : status === 'failed' ? `${brand} · 2D fit`
+      : brand;
   }
 
   /**
@@ -668,8 +791,15 @@ class InPageMirror {
     }
 
     // Shop watermarks, logos and price text are separate islands; keep the glasses.
-    this.eraseCastShadows(data, width, height);
+    this.eraseCastShadows(data, width, height, !isAlreadyIsolated);
     this.keepMainComponents(data, width, height);
+
+    // Keep only the frame front: drops temple arms (including the far arm that
+    // crosses above the frame in angled shots), floor shadows and reflections.
+    if (this.isolateFront(data, width, height)) {
+      ctx.putImageData(imgData, 0, 0);
+      return this.cropToContent(canvas, data, width, height);
+    }
 
     // 3. Find bounding box of remaining frame pixels
     let minX = width, minY = height, maxX = 0, maxY = 0;
@@ -805,6 +935,158 @@ class InPageMirror {
   }
 
   /**
+   * Opaque pixels plus enclosed holes. Clear lenses become transparent holes
+   * during background removal; filling them makes thin-rimmed frames measure
+   * like solid ones, so lens size, bridge and reflections are found reliably.
+   */
+  private solidMask(data: Uint8ClampedArray, width: number, height: number): Uint8Array {
+    const n = width * height;
+    const solid = new Uint8Array(n);
+    const outside = new Uint8Array(n);
+    const queue = new Int32Array(n);
+    let head = 0, tail = 0;
+    const push = (i: number) => { if (!outside[i] && data[i * 4 + 3] <= 25) { outside[i] = 1; queue[tail++] = i; } };
+    for (let x = 0; x < width; x++) { push(x); push((height - 1) * width + x); }
+    for (let y = 0; y < height; y++) { push(y * width); push(y * width + width - 1); }
+    while (head < tail) {
+      const p = queue[head++], x = p % width;
+      if (x > 0) push(p - 1);
+      if (x < width - 1) push(p + 1);
+      if (p >= width) push(p - width);
+      if (p + width < n) push(p + width);
+    }
+    for (let i = 0; i < n; i++) solid[i] = outside[i] ? 0 : 1;
+    return solid;
+  }
+
+  /** Chamfer distance from every set pixel to the nearest unset pixel. */
+  private chamfer(mask: Uint8Array, W: number, H: number): Float32Array {
+    const n = W * H, dist = new Float32Array(n), D = Math.SQRT2;
+    for (let i = 0; i < n; i++) dist[i] = mask[i] ? 1e6 : 0;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const i = y * W + x;
+      if (!dist[i]) continue;
+      let v = dist[i];
+      if (x > 0) v = Math.min(v, dist[i - 1] + 1);
+      if (y > 0) {
+        v = Math.min(v, dist[i - W] + 1);
+        if (x > 0) v = Math.min(v, dist[i - W - 1] + D);
+        if (x < W - 1) v = Math.min(v, dist[i - W + 1] + D);
+      }
+      dist[i] = v;
+    }
+    for (let y = H - 1; y >= 0; y--) for (let x = W - 1; x >= 0; x--) {
+      const i = y * W + x;
+      if (!dist[i]) continue;
+      let v = dist[i];
+      if (x < W - 1) v = Math.min(v, dist[i + 1] + 1);
+      if (y < H - 1) {
+        v = Math.min(v, dist[i + W] + 1);
+        if (x < W - 1) v = Math.min(v, dist[i + W + 1] + D);
+        if (x > 0) v = Math.min(v, dist[i + W - 1] + D);
+      }
+      dist[i] = v;
+    }
+    return dist;
+  }
+
+  /**
+   * Finds the frame front as the thick part of the solid mask (lenses survive
+   * a morphological opening; arms, cords and thin shadow tails do not), then
+   * keeps original pixels only inside a band around it. Returns false when no
+   * lens-like body is found, leaving the legacy heuristics to handle it.
+   */
+  private isolateFront(data: Uint8ClampedArray, width: number, height: number): boolean {
+    const solid = this.solidMask(data, width, height);
+    let minX = width, maxX = -1;
+    for (let i = 0; i < solid.length; i++) if (solid[i]) { const x = i % width; if (x < minX) minX = x; if (x > maxX) maxX = x; }
+    if (maxX - minX < 20) return false;
+    const r = Math.max(2, (maxX - minX) * 0.03);
+    const inner = this.chamfer(solid, width, height);
+    const notCore = new Uint8Array(solid.length);
+    for (let i = 0; i < solid.length; i++) notCore[i] = inner[i] > r ? 0 : 1;
+    const toCore = this.chamfer(notCore, width, height);
+    const core = new Uint8Array(solid.length);
+    let coreCount = 0;
+    for (let i = 0; i < solid.length; i++) if (solid[i] && toCore[i] <= r + 0.5) { core[i] = 1; coreCount++; }
+    if (coreCount < solid.length * 0.01) return false;
+
+    // Largest core components = lenses (often joined into one by a thick bridge).
+    const label = new Int32Array(solid.length);
+    const sizes: number[] = [0];
+    const stack = new Int32Array(solid.length);
+    for (let s0 = 0; s0 < core.length; s0++) {
+      if (!core[s0] || label[s0]) continue;
+      const id = sizes.length;
+      let sp = 0, size = 0;
+      stack[sp++] = s0; label[s0] = id;
+      while (sp) {
+        const p = stack[--sp]; size++;
+        const x = p % width;
+        for (const q of [x > 0 ? p - 1 : -1, x < width - 1 ? p + 1 : -1, p - width, p + width]) {
+          if (q >= 0 && q < core.length && core[q] && !label[q]) { label[q] = id; stack[sp++] = q; }
+        }
+      }
+      sizes.push(size);
+    }
+    const order = sizes.map((v, i) => [v, i]).slice(1).sort((a, b) => b[0] - a[0]);
+    if (!order.length) return false;
+    const keep = new Set<number>([order[0][1]]);
+    if (order[1] && order[1][0] > order[0][0] * 0.3) keep.add(order[1][1]);
+
+    const top = new Int32Array(width).fill(-1), bot = new Int32Array(width).fill(-1);
+    let L = width, R = -1;
+    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+      const i = y * width + x;
+      if (!keep.has(label[i])) continue;
+      if (top[x] < 0) top[x] = y;
+      bot[x] = y;
+      if (x < L) L = x;
+      if (x > R) R = x;
+    }
+    const span = R - L;
+    if (span < 20) return false;
+    // Bridge gap between lenses: use the higher top / lower bottom of its sides.
+    const gapCol = new Uint8Array(width);
+    let lastX = -1;
+    for (let x = L; x <= R; x++) {
+      if (top[x] < 0) continue;
+      if (lastX >= 0 && x - lastX > 1) {
+        const t = Math.min(top[lastX], top[x]), b = Math.max(bot[lastX], bot[x]);
+        for (let k = lastX + 1; k < x; k++) { top[k] = t; bot[k] = b; gapCol[k] = 1; }
+      }
+      lastX = x;
+    }
+    // Above the lenses only the rim itself belongs to the front; over the bridge
+    // allow more for double bars. Anything higher is the far temple arm.
+    const mx = Math.round(span * 0.06), mb = Math.round(span * 0.025);
+    const mtLens = Math.round(span * 0.015), mtBridge = Math.round(span * 0.07);
+    const x0 = Math.max(0, L - mx), x1 = Math.min(width - 1, R + mx);
+    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+      const i = y * width + x;
+      if (data[i * 4 + 3] === 0) continue;
+      const cx = Math.max(L, Math.min(R, x));
+      const mt = gapCol[cx] ? mtBridge : mtLens;
+      const inBand = x >= x0 && x <= x1 && top[cx] >= 0 && y >= top[cx] - mt && y <= bot[cx] + mb;
+      if (!inBand) data[i * 4 + 3] = 0;
+    }
+    this.keepMainComponents(data, width, height);
+    return true;
+  }
+
+  private cropToContent(canvas: HTMLCanvasElement, data: Uint8ClampedArray, width: number, height: number) {
+    let x0 = width, y0 = height, x1 = -1, y1 = -1;
+    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+      if (data[(y * width + x) * 4 + 3] > 25) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    }
+    if (x1 <= x0 || y1 <= y0) return canvas;
+    const out = document.createElement('canvas');
+    out.width = x1 - x0 + 1; out.height = y1 - y0 + 1;
+    out.getContext('2d')?.drawImage(canvas, x0, y0, out.width, out.height, 0, 0, out.width, out.height);
+    return out;
+  }
+
+  /**
    * Removes opaque islands that are much smaller than the largest one (logos,
    * watermarks, captions). Rimless lenses and separate temple pieces are
    * comparable in size to the main piece, so they survive.
@@ -854,12 +1136,20 @@ class InPageMirror {
    * area into neutral, light, smooth pixels (shadow), stopping at the frame:
    * rims are dark, coloured or carry sharp edges.
    */
-  private eraseCastShadows(data: Uint8ClampedArray, width: number, height: number) {
+  private eraseCastShadows(data: Uint8ClampedArray, width: number, height: number, opaqueSource: boolean) {
     const n = width * height;
     const lum = new Float32Array(n);
     for (let i = 0; i < n; i++) {
       lum[i] = 0.2126 * data[i * 4] + 0.7152 * data[i * 4 + 1] + 0.0722 * data[i * 4 + 2];
     }
+    // Background brightness from the border (its colour survives alpha removal).
+    // A floor shadow is darker than the background, but far lighter than a frame.
+    const border: number[] = [];
+    for (let x = 0; x < width; x += 2) border.push(lum[x], lum[(height - 1) * width + x]);
+    for (let y = 0; y < height; y += 2) border.push(lum[y * width], lum[y * width + width - 1]);
+    border.sort((a, b) => a - b);
+    const bgLum = border[border.length >> 1] || 255;
+    const minShadowLum = Math.max(70, bgLum * 0.6);
     const isShadow = (i: number) => {
       const a = data[i * 4 + 3];
       if (a <= 25) return false;
@@ -880,7 +1170,7 @@ class InPageMirror {
         }
         return true;
       }
-      if (lum[i] < 120) return false;
+      if (!opaqueSource || lum[i] < minShadowLum || lum[i] > bgLum + 12) return false;
       let grad = 0;
       if (x > 0) grad = Math.max(grad, Math.abs(lum[i] - lum[i - 1]));
       if (x < width - 1) grad = Math.max(grad, Math.abs(lum[i] - lum[i + 1]));
@@ -1043,7 +1333,8 @@ class InPageMirror {
     const W = src.width, H = src.height;
     if (W < 40 || H < 20) return src;
     const d = ctx.getImageData(0, 0, W, H).data;
-    const A = (x: number, y: number) => d[(y * W + x) * 4 + 3];
+    const solid = this.solidMask(d, W, H);
+    const A = (x: number, y: number) => solid[y * W + x] * 255;
 
     const dens = new Float32Array(W), top = new Int32Array(W).fill(-1), bot = new Int32Array(W).fill(-1);
     let maxD = 0;
@@ -1095,6 +1386,8 @@ class InPageMirror {
       return out;
     };
     if (!l || !r) return crop(L, R);
+    // Implausible measurements (odd shapes, broken cut-outs): never warp wildly.
+    if (l && r && (l.h / r.h > 1.6 || r.h / l.h > 1.6 || l.w / r.w > 1.9 || r.w / l.w > 1.9)) return crop(L, R);
 
     const span = R - L;
     const angled = Math.abs(l.h - r.h) / Math.max(l.h, r.h) > 0.05
@@ -1263,7 +1556,11 @@ class InPageMirror {
         roll: 0,
       };
     }
-    const { data } = ctx.getImageData(0, 0, width, height);
+    // Measure on the hole-filled mask so clear lenses count as lens area.
+    const raw = ctx.getImageData(0, 0, width, height).data;
+    const solid = this.solidMask(raw, width, height);
+    const data = new Uint8ClampedArray(raw.length);
+    for (let i = 0; i < solid.length; i++) data[i * 4 + 3] = solid[i] ? 255 : 0;
 
     const density = new Float32Array(width);
     const colTopY = new Int32Array(width).fill(-1);
@@ -1556,7 +1853,15 @@ class InPageMirror {
     }
 
     const extras: SceneExtras = { occluder, temples, templeColor: this.frameColor };
-    return { front, extras };
+
+    // Generated 3D frame: front width matched to the face like the 2D front.
+    const modelWidth = Math.max(ipdPx * 2.05, Math.min(ipdPx * 2.75, faceW * 0.98)) * this.userScale;
+    const modelPose: ModelPose = {
+      O: [O.x, O.y, O.z], X: [X.x, X.y, X.z], Y: [Y.x, Y.y, Y.z], Z: [Z.x, Z.y, Z.z],
+      scale: modelWidth, forward, focal, depthScale,
+      offset: [this.userOffsetX, this.userOffsetY],
+    };
+    return { front, extras, modelPose };
   }
 
   /**
@@ -1656,13 +1961,13 @@ class InPageMirror {
       if (!frameSource || !pose || !this.hasFittedOnce) return;
 
       if (this.frameCounter++ % 6 === 0) this.updateShade(source, srcW, srcH, pose);
-      const { front: mesh, extras } = this.buildScene(pose, cw, frameSource);
+      const { front: mesh, extras, modelPose } = this.buildScene(pose, cw, frameSource);
       const ipdPx = pose.ipd * cw;
       // Mipmaps already pick the right resolution; a small extra LOD bias
       // softens the studio-sharp product photo to webcam softness.
       const blur = 0.5;
 
-      if (this.renderer.render(cw, ch, mesh, this.shade, blur, extras)) {
+      if (this.renderer.render(cw, ch, mesh, this.shade, blur, extras, modelPose)) {
         const layer = this.renderer.canvas;
         // Soft contact shadow cast onto the nose and cheeks
         ctx.save();

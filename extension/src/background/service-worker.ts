@@ -1,5 +1,6 @@
 import { getSettings, addFrameToHistory } from '../utils/storage';
 import { ExtensionMessage } from '../types';
+import { getFrameModel, toBase64 } from './frame3d';
 
 /**
  * Setup Context Menus on Installation (removeAll prevents duplicate ID errors on reload)
@@ -129,6 +130,13 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
         sendResponse({ success: false, error: String(err) });
       });
     return true; // Keep async channel open
+  }
+
+  if (message.type === 'GENERATE_FRAME_3D' && message.payload?.url) {
+    getFrameModel(message.payload.url)
+      .then(buf => sendResponse({ success: true, glb: toBase64(buf) }))
+      .catch(err => sendResponse({ success: false, error: String(err?.message || err) }));
+    return true;
   }
 
   if (message.type === 'OPEN_TRYON' && message.payload?.frame) {

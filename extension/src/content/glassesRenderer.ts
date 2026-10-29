@@ -53,6 +53,71 @@ void main() {
   outColor = vec4(uColor * vShade, 1.0);
 }`;
 
+// Generated 3D frame: posed on the GPU with the same projection as the mesh
+// front (face axes + mild perspective), lit, and coloured from the product
+// photo on the front with the frame colour elsewhere.
+const MODEL_VERT = `#version 300 es
+in vec3 aPos;
+in vec3 aNormal;
+in vec2 aUv;
+in float aPhoto;
+uniform vec2 uSize;
+uniform vec3 uO, uX, uY, uZ;
+uniform float uScale, uForward, uFocal, uDepthScale;
+uniform vec2 uOffset;
+out vec3 vN;
+out vec2 vUv;
+out float vPhoto;
+void main() {
+  vec3 l = aPos * uScale - vec3(0.0, 0.0, uForward);
+  vec3 rel = uX * l.x + uY * l.y + uZ * l.z;
+  float persp = uFocal / max(uFocal * 0.2, uFocal + rel.z);
+  vec2 p = uO.xy + rel.xy * persp + uOffset;
+  vN = normalize(uX * aNormal.x + uY * aNormal.y + uZ * aNormal.z);
+  vUv = aUv;
+  vPhoto = aPhoto;
+  gl_Position = vec4(p.x / uSize.x * 2.0 - 1.0, 1.0 - p.y / uSize.y * 2.0, clamp(rel.z / uDepthScale, -1.0, 1.0), 1.0);
+}`;
+
+const MODEL_FRAG = `#version 300 es
+precision highp float;
+in vec3 vN;
+in vec2 vUv;
+in float vPhoto;
+uniform sampler2D uTex;
+uniform vec3 uFrame;
+uniform float uGain;
+uniform vec3 uTint;
+uniform int uPass; // 0 = opaque parts (writes depth), 1 = translucent lenses
+out vec4 outColor;
+void main() {
+  vec4 t = texture(uTex, vUv, 0.4);
+  float inside = step(0.0, vUv.x) * step(vUv.x, 1.0) * step(0.0, vUv.y) * step(vUv.y, 1.0);
+  float w = vPhoto * inside;
+  // Gaps in the cut-out (no frame pixel there) fall back to the frame colour.
+  vec3 photo = t.a > 0.02 ? t.rgb / t.a : uFrame;
+  vec3 base = mix(uFrame, photo, w * step(0.02, t.a));
+  float alpha = mix(1.0, t.a, w);
+  // Screen space: x right, y down, z into the screen; light from upper left front.
+  vec3 n = normalize(vN);
+  if (n.z > 0.0) n = -n;
+  vec3 L = normalize(vec3(-0.4, -0.6, -0.7));
+  float diff = max(dot(n, L), 0.0);
+  vec3 H = normalize(L + vec3(0.0, 0.0, -1.0));
+  float spec = pow(max(dot(n, H), 0.0), 40.0) * 0.35;
+  // Photo regions already carry studio lighting: shade them only lightly.
+  float lit = mix(0.45 + 0.75 * diff, 0.85 + 0.25 * diff, w);
+  vec3 col = (base * lit + spec * (1.0 - 0.6 * w)) * uGain * uTint;
+  bool translucent = alpha < 0.97;
+  if ((uPass == 0 && translucent) || (uPass == 1 && !translucent)) discard;
+  outColor = vec4(col * alpha, alpha);
+}`;
+
+export interface ModelPose {
+  O: [number, number, number]; X: [number, number, number]; Y: [number, number, number]; Z: [number, number, number];
+  scale: number; forward: number; focal: number; depthScale: number; offset: [number, number];
+}
+
 export interface Shade { gain: number; tint: [number, number, number] }
 
 /** Extra 3D parts drawn around the textured frame front. */
@@ -82,6 +147,10 @@ export class GlassesRenderer {
   private solidBuf: WebGLBuffer | null = null;
   private uSolidSize: WebGLUniformLocation | null = null;
   private uSolidColor: WebGLUniformLocation | null = null;
+  private modelProg: WebGLProgram | null = null;
+  private modelVao: WebGLVertexArrayObject | null = null;
+  private modelCount = 0;
+  private mu: Record<string, WebGLUniformLocation | null> = {};
 
   constructor() {
     this.gl = this.canvas.getContext('webgl2', {
@@ -128,6 +197,12 @@ export class GlassesRenderer {
     gl.vertexAttribPointer(sShade, 1, gl.FLOAT, false, 16, 12);
     this.uSolidSize = gl.getUniformLocation(solid, 'uSize');
     this.uSolidColor = gl.getUniformLocation(solid, 'uColor');
+
+    const model = link(MODEL_VERT, MODEL_FRAG);
+    this.modelProg = model;
+    for (const u of ['uSize', 'uO', 'uX', 'uY', 'uZ', 'uScale', 'uForward', 'uFocal', 'uDepthScale', 'uOffset', 'uTex', 'uFrame', 'uGain', 'uTint', 'uPass']) {
+      this.mu[u] = gl.getUniformLocation(model, u);
+    }
 
     const prog = link(VERT, FRAG);
     this.prog = prog;
@@ -181,6 +256,34 @@ export class GlassesRenderer {
     this.tex = gl.createTexture();
   }
 
+  /** Upload a prepared 3D frame (static buffers; posed per frame by uniforms). */
+  setModel(m: { positions: Float32Array; normals: Float32Array; uvs: Float32Array; photoWeight: Float32Array; indices: Uint32Array } | null) {
+    const gl = this.gl;
+    if (!gl || !this.modelProg) return;
+    if (!m) { this.modelCount = 0; return; }
+    if (!this.modelVao) this.modelVao = gl.createVertexArray();
+    gl.bindVertexArray(this.modelVao);
+    const attr = (name: string, data: Float32Array, size: number) => {
+      const loc = gl.getAttribLocation(this.modelProg!, name);
+      const buf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0);
+    };
+    attr('aPos', m.positions, 3);
+    attr('aNormal', m.normals, 3);
+    attr('aUv', m.uvs, 2);
+    attr('aPhoto', m.photoWeight, 1);
+    const ib = gl.createBuffer();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, m.indices, gl.STATIC_DRAW);
+    gl.bindVertexArray(null);
+    this.modelCount = m.indices.length;
+  }
+
+  get hasModel() { return this.modelCount > 0; }
+
   setTexture(src: HTMLCanvasElement) {
     const gl = this.gl;
     if (!gl || !this.tex) return;
@@ -205,7 +308,7 @@ export class GlassesRenderer {
    * @param positions (GRID_COLS+1)*(GRID_ROWS+1) vertices as x,y (canvas px), depth (-1..1)
    * @param blur mip LOD bias; ~0.5 softens studio-sharp product photos to webcam softness
    */
-  render(width: number, height: number, positions: Float32Array, shade: Shade, blur: number, extras?: SceneExtras): boolean {
+  render(width: number, height: number, positions: Float32Array, shade: Shade, blur: number, extras?: SceneExtras, pose?: ModelPose): boolean {
     const gl = this.gl;
     if (!gl || !this.prog || !this.hasTexture) return false;
     if (this.canvas.width !== width || this.canvas.height !== height) {
@@ -235,11 +338,40 @@ export class GlassesRenderer {
       gl.colorMask(false, false, false, false);
       gl.drawArrays(gl.TRIANGLES, 0, occ.length / 4);
       gl.colorMask(true, true, true, true);
-      // 2. Temple arms, before the front so they show through tinted lenses.
-      gl.bufferData(gl.ARRAY_BUFFER, extras.temples, gl.STREAM_DRAW);
-      const c = extras.templeColor;
-      gl.uniform3f(this.uSolidColor, c[0] * shade.gain * shade.tint[0], c[1] * shade.gain * shade.tint[1], c[2] * shade.gain * shade.tint[2]);
-      gl.drawArrays(gl.TRIANGLES, 0, extras.temples.length / 4);
+      // 2. Temple arms, before the front so they show through tinted lenses
+      //    (a generated 3D model brings its own arms).
+      if (!(this.modelCount && pose)) {
+        gl.bufferData(gl.ARRAY_BUFFER, extras.temples, gl.STREAM_DRAW);
+        const c = extras.templeColor;
+        gl.uniform3f(this.uSolidColor, c[0] * shade.gain * shade.tint[0], c[1] * shade.gain * shade.tint[1], c[2] * shade.gain * shade.tint[2]);
+        gl.drawArrays(gl.TRIANGLES, 0, extras.temples.length / 4);
+      }
+    }
+
+    if (this.modelCount && pose && this.modelProg) {
+      const u = this.mu;
+      gl.useProgram(this.modelProg);
+      gl.bindVertexArray(this.modelVao);
+      gl.uniform2f(u.uSize, width, height);
+      gl.uniform3fv(u.uO, pose.O); gl.uniform3fv(u.uX, pose.X); gl.uniform3fv(u.uY, pose.Y); gl.uniform3fv(u.uZ, pose.Z);
+      gl.uniform1f(u.uScale, pose.scale); gl.uniform1f(u.uForward, pose.forward);
+      gl.uniform1f(u.uFocal, pose.focal); gl.uniform1f(u.uDepthScale, pose.depthScale);
+      gl.uniform2f(u.uOffset, pose.offset[0], pose.offset[1]);
+      const c = extras?.templeColor ?? [0.08, 0.08, 0.09];
+      gl.uniform3f(u.uFrame, c[0], c[1], c[2]);
+      gl.uniform1f(u.uGain, shade.gain);
+      gl.uniform3f(u.uTint, shade.tint[0], shade.tint[1], shade.tint[2]);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, this.tex);
+      gl.uniform1i(u.uTex, 0);
+      gl.uniform1i(u.uPass, 0);
+      gl.drawElements(gl.TRIANGLES, this.modelCount, gl.UNSIGNED_INT, 0);
+      gl.depthMask(false);
+      gl.uniform1i(u.uPass, 1);
+      gl.drawElements(gl.TRIANGLES, this.modelCount, gl.UNSIGNED_INT, 0);
+      gl.depthMask(true);
+      gl.bindVertexArray(null);
+      return true;
     }
 
     gl.useProgram(this.prog);
