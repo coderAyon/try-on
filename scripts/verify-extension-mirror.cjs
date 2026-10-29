@@ -82,9 +82,10 @@ const assert = require('node:assert/strict');
     await page.waitForFunction(() => MirrorTest.inPageMirror.landmarks.available && MirrorTest.inPageMirror.hasFittedOnce, { timeout: 25000 });
     const fit = await page.evaluate(() => {
       const m = MirrorTest.inPageMirror;
-      return { x: m.smoothX, y: m.smoothY, width: m.smoothWidth, geom: m.frameGeom };
+      const cw = m.canvasEl.width;
+      return { x: m.pose.origin.x * cw, y: m.pose.origin.y * cw, ipd: m.pose.ipd * cw, geom: m.frameGeom };
     });
-    assert.ok(fit.geom && fit.width > 50 && fit.width < 640);
+    assert.ok(fit.geom && fit.ipd > 20 && fit.ipd < 320);
     assert.ok(fit.x > 150 && fit.x < 500);
     await page.evaluate(() => {
       const { canvas } = window.mirrorStream;

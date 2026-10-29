@@ -5,8 +5,9 @@
  * Product photos are 2D cutouts; front-facing photos give the best fit.
  */
 
-import { picoDetector } from './picoDetector';
+import { picoDetector, type FacePose, type FaceTrackerResult, type Vec3 } from './picoDetector';
 import { LandmarkTracker } from './landmarkTracker';
+import { GlassesRenderer, GRID_COLS, GRID_ROWS, type Shade } from './glassesRenderer';
 
 export interface MirrorFramePayload {
   frame: string;
@@ -23,6 +24,34 @@ export interface EyewearGeometry {
   lensSpan: number;
   roll: number;
 }
+
+/** One Euro filter: steady when the head is still, low lag when it moves. */
+class OneEuro {
+  private x = NaN;
+  private dx = 0;
+  constructor(private minCutoff: number, private beta: number, private dCutoff = 1) {}
+  private alpha(cutoff: number, dt: number) {
+    const tau = 1 / (2 * Math.PI * cutoff);
+    return 1 / (1 + tau / dt);
+  }
+  filter(v: number, dt: number) {
+    if (Number.isNaN(this.x)) { this.x = v; return v; }
+    const d = (v - this.x) / dt;
+    this.dx += this.alpha(this.dCutoff, dt) * (d - this.dx);
+    this.x += this.alpha(this.minCutoff + this.beta * Math.abs(this.dx), dt) * (v - this.x);
+    return this.x;
+  }
+  reset() { this.x = NaN; this.dx = 0; }
+}
+
+const vNorm = (a: Vec3): Vec3 => {
+  const l = Math.hypot(a.x, a.y, a.z) || 1;
+  return { x: a.x / l, y: a.y / l, z: a.z / l };
+};
+const vDot = (a: Vec3, b: Vec3) => a.x * b.x + a.y * b.y + a.z * b.z;
+const vCross = (a: Vec3, b: Vec3): Vec3 => ({
+  x: a.y * b.z - a.z * b.y, y: a.z * b.x - a.x * b.z, z: a.x * b.y - a.y * b.x,
+});
 
 class InPageMirror {
   private landmarks = new LandmarkTracker();
@@ -51,14 +80,21 @@ class InPageMirror {
   private userOffsetY: number = 0;
   private userOffsetX: number = 0;
 
-  // Smoothed tracking state (EMA filter for silky smooth, jitter-free AR)
-  private smoothX: number = 0;
-  private smoothY: number = 0;
-  private smoothWidth: number = 0;
-  private smoothHeight: number = 0;
-  private smoothRoll: number = 0;
-  private hasInitializedPose: boolean = false;
+  // Filtered head pose: origin (3), x axis (3), y axis (3), ipd (1)
+  private renderer = new GlassesRenderer();
+  private poseFilters = [
+    ...[0, 1, 2].map(() => new OneEuro(1.7, 12)),
+    ...[0, 1, 2, 3, 4, 5].map(() => new OneEuro(1.5, 6)),
+    new OneEuro(0.6, 3),
+  ];
+  private pose: FacePose | null = null;
+  private lastPoseTime = 0;
+  private lastTrackVersion = -1;
   private hasFittedOnce: boolean = false;
+  private meshPositions = new Float32Array((GRID_COLS + 1) * (GRID_ROWS + 1) * 3);
+  private sampleCtx: CanvasRenderingContext2D | null = null;
+  private frameCounter = 0;
+  private shade: Shade = { gain: 1, tint: [1, 1, 1] };
 
   // Direct canvas drag-to-fit support
   private isDraggingGlasses: boolean = false;
@@ -410,16 +446,6 @@ class InPageMirror {
       vp.style.height = 'auto';
       vp.style.aspectRatio = `${w} / ${h}`;
     }
-
-    // Centered webcam resting pose
-    if (!this.hasInitializedPose) {
-      this.smoothX = w * 0.5;
-      this.smoothY = h * 0.40;
-      this.smoothWidth = w * 0.42;
-      this.smoothHeight = w * 0.18;
-      this.smoothRoll = 0;
-      this.hasInitializedPose = true;
-    }
   }
 
   /**
@@ -475,9 +501,13 @@ class InPageMirror {
     if (request !== this.frameRequest) return;
 
     try {
-      this.cutoutCanvas = this.removeBackground(img);
+      const cutout = this.removeBackground(img);
+      // Geometry first: it relies on the lenses still being solid.
+      this.frameGeom = this.analyzeEyewearGeometry(cutout);
+      this.refineLenses(cutout);
+      this.cutoutCanvas = cutout;
       this.fallbackImage = null;
-      this.frameGeom = this.analyzeEyewearGeometry(this.cutoutCanvas);
+      this.renderer.setTexture(cutout);
     } catch (err) {
       console.warn('[Lumen Mirror] Background removal error, using raw image:', err);
       this.setStatus('Unable to process this image. Choose a front-facing product photo.');
@@ -616,11 +646,12 @@ class InPageMirror {
         }
       }
 
-      for (let i = 0; i < visited.length; i++) {
-        if (visited[i]) {
-          data[i * 4 + 3] = 0;
-        }
-      }
+      // Enclosed background pockets (between double bridges, inside clear lenses,
+      // baked-in "transparent" checkerboards) are unreachable from the border.
+      // Clear sizeable ones that match the background colour tightly.
+      this.clearEnclosedBackground(data, width, height, visited, seeds);
+
+      this.softMatte(data, width, height, visited, seeds);
     }
 
     // 3. Find bounding box of remaining frame pixels
@@ -754,6 +785,195 @@ class InPageMirror {
     }
 
     return canvas;
+  }
+
+  private clearEnclosedBackground(
+    data: Uint8ClampedArray, width: number, height: number,
+    visited: Uint8Array, seeds: { r: number; g: number; b: number }[],
+  ) {
+    const n = width * height;
+    const isTightBg = (i: number) => {
+      const r = data[i * 4], g = data[i * 4 + 1], b = data[i * 4 + 2];
+      if (r > 246 && g > 246 && b > 246) return true;
+      for (const s of seeds) {
+        const dr = r - s.r, dg = g - s.g, db = b - s.b;
+        if (dr * dr + dg * dg + db * db < 900) return true;
+      }
+      return false;
+    };
+    const minArea = Math.max(40, n * 0.003);
+    const seen = new Uint8Array(n);
+    const stack = new Int32Array(n);
+    const region: number[] = [];
+    for (let start = 0; start < n; start++) {
+      if (visited[start] || seen[start] || !isTightBg(start)) continue;
+      region.length = 0;
+      let sp = 0;
+      stack[sp++] = start;
+      seen[start] = 1;
+      while (sp > 0) {
+        const p = stack[--sp];
+        region.push(p);
+        const x = p % width;
+        const nb = [x > 0 ? p - 1 : -1, x < width - 1 ? p + 1 : -1, p - width, p + width];
+        for (const q of nb) {
+          if (q >= 0 && q < n && !visited[q] && !seen[q] && isTightBg(q)) {
+            seen[q] = 1;
+            stack[sp++] = q;
+          }
+        }
+      }
+      if (region.length >= minArea) for (const p of region) visited[p] = 1;
+    }
+  }
+
+  /**
+   * Turns the binary flood-fill mask into a soft alpha matte and removes the
+   * background colour that bleeds into anti-aliased edge pixels (the white /
+   * grey fringe that made frames look like hand-cut stickers).
+   */
+  private softMatte(
+    data: Uint8ClampedArray, width: number, height: number,
+    visited: Uint8Array, seeds: { r: number; g: number; b: number }[],
+  ) {
+    const n = width * height;
+    const palette = [...seeds, { r: 255, g: 255, b: 255 }];
+    const dist = new Float32Array(n);
+    const nearest = new Uint8Array(n);
+    for (let i = 0; i < n; i++) {
+      const r = data[i * 4], g = data[i * 4 + 1], b = data[i * 4 + 2];
+      let best = Infinity, bi = 0;
+      for (let k = 0; k < palette.length; k++) {
+        const s = palette[k];
+        const d = (r - s.r) ** 2 + (g - s.g) ** 2 + (b - s.b) ** 2;
+        if (d < best) { best = d; bi = k; }
+      }
+      dist[i] = Math.sqrt(best);
+      nearest[i] = bi;
+    }
+
+    // Edge band: pixels within 2px of the foreground/background boundary.
+    const band = new Uint8Array(n);
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const i = y * width + x;
+        const v = visited[i];
+        if ((x > 0 && visited[i - 1] !== v) || (x < width - 1 && visited[i + 1] !== v) ||
+            (y > 0 && visited[i - width] !== v) || (y < height - 1 && visited[i + width] !== v)) {
+          for (let dy = -2; dy <= 2; dy++) {
+            for (let dx = -2; dx <= 2; dx++) {
+              const xx = x + dx, yy = y + dy;
+              if (xx >= 0 && xx < width && yy >= 0 && yy < height) band[yy * width + xx] = 1;
+            }
+          }
+        }
+      }
+    }
+
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const i = y * width + x;
+        if (!band[i]) {
+          if (visited[i]) data[i * 4 + 3] = 0;
+          continue;
+        }
+        // Distance of the nearby solid frame colour from the background.
+        let dmax = 0;
+        for (let dy = -3; dy <= 3; dy++) {
+          for (let dx = -3; dx <= 3; dx++) {
+            const xx = x + dx, yy = y + dy;
+            if (xx < 0 || xx >= width || yy < 0 || yy >= height) continue;
+            const j = yy * width + xx;
+            if (!visited[j] && dist[j] > dmax) dmax = dist[j];
+          }
+        }
+        let a = dmax > 30 ? (dist[i] - 10) / (dmax - 10) : (visited[i] ? 0 : 1);
+        a = Math.max(0, Math.min(1, a));
+        if (a <= 0.02) { data[i * 4 + 3] = 0; continue; }
+        if (a < 0.98) {
+          // Un-mix the background: C = B + (I - B) / alpha
+          const s = palette[nearest[i]];
+          data[i * 4] = Math.max(0, Math.min(255, s.r + (data[i * 4] - s.r) / a));
+          data[i * 4 + 1] = Math.max(0, Math.min(255, s.g + (data[i * 4 + 1] - s.g) / a));
+          data[i * 4 + 2] = Math.max(0, Math.min(255, s.b + (data[i * 4 + 2] - s.b) / a));
+        }
+        data[i * 4 + 3] = Math.round(data[i * 4 + 3] * a);
+      }
+    }
+  }
+
+  /**
+   * Real lenses are tinted glass, not paint. Pixels deep inside the frame
+   * outline (further than the rim thickness from any edge) are treated as lens
+   * and made semi-transparent so the eyes show through faintly, while specular
+   * highlights stay visible. Clear lenses become almost fully transparent.
+   */
+  private refineLenses(canvas: HTMLCanvasElement) {
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return;
+    const W = canvas.width, H = canvas.height, n = W * H;
+    const img = ctx.getImageData(0, 0, W, H);
+    const d = img.data;
+
+    // Chamfer distance to the nearest transparent pixel (or image border).
+    const INF = 1e6;
+    const dist = new Float32Array(n);
+    for (let i = 0; i < n; i++) dist[i] = d[i * 4 + 3] < 128 ? 0 : INF;
+    const D = Math.SQRT2;
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const i = y * W + x;
+        if (dist[i] === 0) continue;
+        let v = (x === 0 || y === 0) ? 1 : dist[i];
+        if (x > 0) v = Math.min(v, dist[i - 1] + 1);
+        if (y > 0) {
+          v = Math.min(v, dist[i - W] + 1);
+          if (x > 0) v = Math.min(v, dist[i - W - 1] + D);
+          if (x < W - 1) v = Math.min(v, dist[i - W + 1] + D);
+        }
+        dist[i] = v;
+      }
+    }
+    for (let y = H - 1; y >= 0; y--) {
+      for (let x = W - 1; x >= 0; x--) {
+        const i = y * W + x;
+        if (dist[i] === 0) continue;
+        let v = (x === W - 1 || y === H - 1) ? 1 : dist[i];
+        if (x < W - 1) v = Math.min(v, dist[i + 1] + 1);
+        if (y < H - 1) {
+          v = Math.min(v, dist[i + W] + 1);
+          if (x < W - 1) v = Math.min(v, dist[i + W + 1] + D);
+          if (x > 0) v = Math.min(v, dist[i + W - 1] + D);
+        }
+        dist[i] = v;
+      }
+    }
+
+    const rim = Math.max(3, W * 0.035);
+    const lum = (i: number) => (0.2126 * d[i * 4] + 0.7152 * d[i * 4 + 1] + 0.0722 * d[i * 4 + 2]) / 255;
+    const interior: number[] = [];
+    for (let i = 0; i < n; i++) if (dist[i] > rim * 1.4) interior.push(lum(i));
+    if (interior.length < n * 0.03) return; // wire frames / already-clear lenses
+    interior.sort((a, b) => a - b);
+    const medianL = interior[interior.length >> 1];
+    const clear = medianL > 0.78;
+    const base = Math.max(0.62, Math.min(0.9, 0.95 - medianL * 0.55));
+    const hiStart = Math.max(medianL * 1.6, 0.35);
+
+    const smooth = (e0: number, e1: number, v: number) => {
+      const t = Math.max(0, Math.min(1, (v - e0) / (e1 - e0)));
+      return t * t * (3 - 2 * t);
+    };
+    for (let i = 0; i < n; i++) {
+      if (dist[i] <= rim) continue;
+      const t = smooth(rim, rim * 1.8, dist[i]);
+      const L = lum(i);
+      const lensA = clear
+        ? Math.max(0.04, Math.min(0.5, (0.92 - L) * 1.6))
+        : base + (0.96 - base) * smooth(hiStart, 0.95, L);
+      d[i * 4 + 3] = Math.round(d[i * 4 + 3] * (1 + (lensA - 1) * t));
+    }
+    ctx.putImageData(img, 0, 0);
   }
 
   /**
@@ -921,7 +1141,130 @@ class InPageMirror {
   }
 
   /**
-   * Main animation loop: renders video frame mirrored + fits sunglasses onto eyes and nose bridge
+   * Converts a 2D fallback detection (Pico / native FaceDetector) into a flat,
+   * roll-only pose so both trackers share one rendering path.
+   */
+  private poseFromResult(t: FaceTrackerResult, cw: number, ch: number): FacePose {
+    if (t.pose) return t.pose;
+    const c = Math.cos(t.rollRad), s = Math.sin(t.rollRad);
+    return {
+      origin: { x: t.centerX, y: t.bridgeY * ch / cw, z: 0 },
+      xAxis: { x: c, y: s, z: 0 },
+      yAxis: { x: -s, y: c, z: 0 },
+      zAxis: { x: 0, y: 0, z: 1 },
+      ipd: t.eyeSpan ?? t.width / 2.25,
+    };
+  }
+
+  private filterPose(raw: FacePose, dt: number): FacePose {
+    const f = this.poseFilters;
+    const v = [
+      raw.origin.x, raw.origin.y, raw.origin.z,
+      raw.xAxis.x, raw.xAxis.y, raw.xAxis.z,
+      raw.yAxis.x, raw.yAxis.y, raw.yAxis.z,
+      raw.ipd,
+    ].map((x, i) => f[i].filter(x, dt));
+    const xAxis = vNorm({ x: v[3], y: v[4], z: v[5] });
+    const yRaw = { x: v[6], y: v[7], z: v[8] };
+    const k = vDot(yRaw, xAxis);
+    const yAxis = vNorm({ x: yRaw.x - xAxis.x * k, y: yRaw.y - xAxis.y * k, z: yRaw.z - xAxis.z * k });
+    return {
+      origin: { x: v[0], y: v[1], z: v[2] },
+      xAxis, yAxis, zAxis: vCross(xAxis, yAxis), ipd: v[9],
+    };
+  }
+
+  private resetPose() {
+    this.poseFilters.forEach(f => f.reset());
+    this.pose = null;
+    this.lastPoseTime = 0;
+    this.hasFittedOnce = false;
+  }
+
+  /**
+   * Projects the product cut-out onto the face as a slightly wrapped surface
+   * sitting in front of the eyes. Lens centres land on the eye centres, the
+   * frame foreshortens with yaw/pitch and gets mild perspective.
+   */
+  private buildMesh(pose: FacePose, cw: number, src: { width: number; height: number }) {
+    const g = this.frameGeom;
+    const texW = src.width, texH = src.height;
+    const bridgeX = g ? g.bridge.x : texW * 0.5;
+    const pupilY = g ? g.opticalPupilY : texH * 0.42;
+    const lensSpan = g ? g.lensSpan : texW * 0.44;
+    const photoRoll = g ? g.roll : 0;
+
+    const ipdPx = pose.ipd * cw;
+    const S = (ipdPx / lensSpan) * this.userScale;        // canvas px per texture px
+    const halfW = (texW * S) / 2;
+    const forward = ipdPx * 0.22;                           // lens plane sits ahead of the eyes
+    const wrap = 0.1;                                       // frame-front curvature
+    const focal = ipdPx * 9;                                // ~ webcam at arm's length
+    const O = { x: pose.origin.x * cw, y: pose.origin.y * cw, z: pose.origin.z * cw };
+    const { xAxis: X, yAxis: Y, zAxis: Z } = pose;
+    const cr = Math.cos(-photoRoll), sr = Math.sin(-photoRoll);
+
+    const out = this.meshPositions;
+    let k = 0;
+    for (let r = 0; r <= GRID_ROWS; r++) {
+      for (let c = 0; c <= GRID_COLS; c++) {
+        const tx = (c / GRID_COLS) * texW - bridgeX;
+        const ty = (r / GRID_ROWS) * texH - pupilY;
+        const lx = (tx * cr - ty * sr) * S;
+        const ly = (tx * sr + ty * cr) * S;
+        const nx = lx / halfW;
+        const lz = -forward + wrap * halfW * nx * nx;
+        const px = O.x + X.x * lx + Y.x * ly + Z.x * lz;
+        const py = O.y + X.y * lx + Y.y * ly + Z.y * lz;
+        const depth = X.z * lx + Y.z * ly + Z.z * lz;
+        const persp = focal / (focal + depth);
+        out[k++] = O.x + (px - O.x) * persp + this.userOffsetX;
+        out[k++] = O.y + (py - O.y) * persp + this.userOffsetY;
+        out[k++] = Math.max(-1, Math.min(1, depth / (halfW * 4)));
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Estimates the light falling on the face (sampled from the cheeks) so a
+   * brightly lit studio product photo is dimmed to match a typical webcam.
+   */
+  private updateShade(source: CanvasImageSource, srcW: number, srcH: number, pose: FacePose) {
+    if (!this.sampleCtx) {
+      const c = document.createElement('canvas');
+      c.width = c.height = 8;
+      this.sampleCtx = c.getContext('2d', { willReadFrequently: true });
+    }
+    const ctx = this.sampleCtx;
+    if (!ctx) return;
+    const ipd = pose.ipd * srcW;
+    // The source is unmirrored; pose x is mirrored.
+    const cx = (1 - pose.origin.x) * srcW;
+    const cy = pose.origin.y * srcW + ipd * 0.7;
+    const sw = ipd * 1.6, sh = ipd * 0.5;
+    const sx = Math.max(0, cx - sw / 2), sy = Math.max(0, Math.min(srcH - sh, cy - sh / 2));
+    try {
+      ctx.drawImage(source, sx, sy, Math.min(sw, srcW - sx), sh, 0, 0, 8, 8);
+      const d = ctx.getImageData(0, 0, 8, 8).data;
+      let r = 0, g = 0, b = 0;
+      for (let i = 0; i < d.length; i += 4) { r += d[i]; g += d[i + 1]; b += d[i + 2]; }
+      const px = d.length / 4;
+      r /= px * 255; g /= px * 255; b /= px * 255;
+      const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      const gain = Math.max(0.6, Math.min(1.1, 0.35 + 0.65 * (lum / 0.55)));
+      const m = Math.max(r, g, b, 1e-3);
+      const tint: [number, number, number] = [r / m, g / m, b / m].map(t => 1 + (t - 1) * 0.08) as [number, number, number];
+      const s = this.shade;
+      s.gain += (gain - s.gain) * 0.15;
+      s.tint = s.tint.map((t, i) => t + (tint[i] - t) * 0.15) as [number, number, number];
+    } catch { /* tainted or not ready: keep previous estimate */ }
+  }
+
+  /**
+   * Main animation loop: draws the camera frame the tracker analysed (so the
+   * overlay never trails the face), then the glasses as a projected 3D surface
+   * with a soft contact shadow and light matched to the room.
    */
   private startRenderLoop() {
     const render = () => {
@@ -933,50 +1276,40 @@ class InPageMirror {
 
       const cw = this.canvasEl.width;
       const ch = this.canvasEl.height;
+      const ctx = this.ctx;
 
-      // 1. Draw mirrored camera stream (true mirror reflection)
-      this.ctx.save();
-      this.ctx.translate(cw, 0);
-      this.ctx.scale(-1, 1);
-      this.ctx.drawImage(this.videoEl, 0, 0, cw, ch);
-      this.ctx.restore();
-
-      // 2. Real-Time Face & Eye Landmark Alignment via Dual Engine
       const tracker = this.trackFaceFeatures();
-      const badge = this.container?.querySelector('#lumen-face-badge');
+      const synced = this.landmarks.available ? this.landmarks.frame : null;
+      const source: CanvasImageSource = synced || this.videoEl;
+      const srcW = synced ? synced.width : this.videoEl.videoWidth || cw;
+      const srcH = synced ? synced.height : this.videoEl.videoHeight || ch;
 
+      // 1. Mirrored camera frame
+      ctx.save();
+      ctx.setTransform(-1, 0, 0, 1, cw, 0);
+      ctx.drawImage(source, 0, 0, cw, ch);
+      ctx.restore();
+
+      // 2. Pose update (only on new tracker output for the landmark engine)
+      const badge = this.container?.querySelector('#lumen-face-badge');
+      const now = performance.now();
       if (tracker && tracker.detected) {
-        this.lastFaceSeen = performance.now();
+        const fresh = !this.landmarks.available || this.landmarks.version !== this.lastTrackVersion;
+        if (fresh) {
+          this.lastTrackVersion = this.landmarks.version;
+          const dt = this.lastPoseTime ? Math.max(1 / 120, Math.min(0.25, (now - this.lastPoseTime) / 1000)) : 1 / 30;
+          this.lastPoseTime = now;
+          this.pose = this.filterPose(this.poseFromResult(tracker, cw, ch), dt);
+          this.hasFittedOnce = true;
+        }
+        this.lastFaceSeen = now;
         if (badge && badge.textContent !== 'Face Locked') {
           badge.textContent = 'Face Locked';
           (badge as HTMLElement).style.background = 'rgba(16, 185, 129, 0.25)';
           (badge as HTMLElement).style.color = '#34d399';
         }
-
-        const targetX = cw * tracker.centerX + this.userOffsetX;
-        const targetY = ch * tracker.bridgeY + this.userOffsetY;
-        const targetWidth = tracker.eyeSpan && this.frameGeom
-          ? cw * tracker.eyeSpan * ((this.cutoutCanvas?.width || 1) / this.frameGeom.lensSpan) * this.userScale
-          : cw * tracker.width * this.userScale;
-        const targetRoll = tracker.rollRad;
-
-        // 3. Smooth temporal interpolation: immediate snap on first face acquisition, then silky EMA tracking
-        if (!this.hasFittedOnce) {
-          this.smoothX = targetX;
-          this.smoothY = targetY;
-          this.smoothWidth = targetWidth;
-          this.smoothRoll = targetRoll;
-          this.hasFittedOnce = true;
-        } else {
-          const dist = Math.hypot(targetX - this.smoothX, targetY - this.smoothY);
-          const lerpFactor = dist > 40 ? 0.65 : 0.45;
-          this.smoothX += (targetX - this.smoothX) * lerpFactor;
-          this.smoothY += (targetY - this.smoothY) * lerpFactor;
-          this.smoothWidth += (targetWidth - this.smoothWidth) * lerpFactor;
-          this.smoothRoll += (targetRoll - this.smoothRoll) * lerpFactor;
-        }
       } else {
-        if (performance.now() - this.lastFaceSeen > 350) this.hasFittedOnce = false;
+        if (now - this.lastFaceSeen > 500 && this.hasFittedOnce) this.resetPose();
         if (badge && badge.textContent !== 'Searching Face…') {
           badge.textContent = 'Searching Face…';
           (badge as HTMLElement).style.background = 'rgba(245, 158, 11, 0.20)';
@@ -984,41 +1317,42 @@ class InPageMirror {
         }
       }
 
-      // 4. Render Sunglasses Frame onto Face
-      const frameSource = this.cutoutCanvas || this.fallbackImage;
-      if (frameSource && this.hasFittedOnce) {
-        const aspect = (frameSource.height || 180) / (frameSource.width || 400);
-        this.smoothHeight = this.smoothWidth * aspect;
+      // 3. Glasses
+      const frameSource = this.cutoutCanvas;
+      const pose = this.pose;
+      if (!frameSource || !pose || !this.hasFittedOnce) return;
 
-        this.ctx.save();
-        this.ctx.translate(this.smoothX, this.smoothY);
-        this.ctx.rotate(this.smoothRoll - (this.frameGeom ? this.frameGeom.roll : 0));
+      if (this.frameCounter++ % 6 === 0) this.updateShade(source, srcW, srcH, pose);
+      const mesh = this.buildMesh(pose, cw, frameSource);
+      const ipdPx = pose.ipd * cw;
+      // Mipmaps already pick the right resolution; a small extra LOD bias
+      // softens the studio-sharp product photo to webcam softness.
+      const blur = 0.5;
 
-        // Realistic depth shadow under the frame on the nasal saddle and cheeks
-        this.ctx.shadowColor = 'rgba(0, 0, 0, 0.42)';
-        this.ctx.shadowBlur = 14;
-        this.ctx.shadowOffsetY = 4;
-
-        // Optical landmark alignment matching local project calculation (customFrameProcessor.ts):
-        // Bridge center aligns with user's nasal saddle, optical pupil line aligns with user's eye level
-        const srcW = frameSource.width || 400;
-        const srcH = frameSource.height || 180;
-        const normBridgeX = this.frameGeom ? this.frameGeom.bridge.x / srcW : 0.50;
-        const normPupilY = this.frameGeom ? this.frameGeom.opticalPupilY / srcH : 0.42;
-
-        const drawX = -normBridgeX * this.smoothWidth;
-        const drawY = -normPupilY * this.smoothHeight;
-
-        this.ctx.drawImage(
-          frameSource,
-          drawX,
-          drawY,
-          this.smoothWidth,
-          this.smoothHeight
+      if (this.renderer.render(cw, ch, mesh, this.shade, blur)) {
+        const layer = this.renderer.canvas;
+        // Soft contact shadow cast onto the nose and cheeks
+        ctx.save();
+        ctx.globalAlpha = 0.2;
+        ctx.filter = `brightness(0) blur(${Math.max(2, ipdPx * 0.05).toFixed(1)}px)`;
+        ctx.drawImage(layer, 0, ipdPx * 0.06);
+        ctx.restore();
+        ctx.drawImage(layer, 0, 0);
+      } else {
+        // 2D fallback: affine fit of the projected corners
+        const C = GRID_COLS + 1;
+        const p0 = 0, p1 = GRID_COLS * 3, p2 = GRID_ROWS * C * 3;
+        const w = frameSource.width, h = frameSource.height;
+        ctx.save();
+        ctx.setTransform(
+          (mesh[p1] - mesh[p0]) / w, (mesh[p1 + 1] - mesh[p0 + 1]) / w,
+          (mesh[p2] - mesh[p0]) / h, (mesh[p2 + 1] - mesh[p0 + 1]) / h,
+          mesh[p0], mesh[p0 + 1],
         );
-
-
-        this.ctx.restore();
+        ctx.imageSmoothingQuality = 'high';
+        ctx.filter = `brightness(${this.shade.gain.toFixed(2)})`;
+        ctx.drawImage(frameSource, 0, 0);
+        ctx.restore();
       }
     };
 
@@ -1130,7 +1464,7 @@ class InPageMirror {
         this.fallbackImage = null;
         this.cvCanvas = null;
         this.cvCtx = null;
-        this.hasInitializedPose = false;
+        this.pose = null;
     }
   }
 }

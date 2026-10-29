@@ -14,6 +14,22 @@ export interface FaceTrackerResult {
   rollRad: number; // Head rotation angle in radians
   confidence: number;
   eyeSpan?: number;
+  /** Full 3D head pose from the landmark tracker (absent for the 2D fallbacks). */
+  pose?: FacePose;
+}
+
+export interface Vec3 { x: number; y: number; z: number }
+
+/**
+ * Head pose in mirrored frame space. Every component (including y and z) is
+ * normalised by the frame WIDTH, so multiplying by the canvas width gives pixels.
+ */
+export interface FacePose {
+  origin: Vec3;  // midpoint between the eye centres (corner based, gaze independent)
+  xAxis: Vec3;   // unit vector across the face, screen-left eye -> screen-right eye
+  yAxis: Vec3;   // unit vector down the face, forehead -> chin
+  zAxis: Vec3;   // unit vector into the screen (away from the camera)
+  ipd: number;   // 3D distance between the eye centres
 }
 
 type ClassifyRegionFn = (r: number, c: number, s: number, pixels: Uint8Array, ldim: number) => number;
